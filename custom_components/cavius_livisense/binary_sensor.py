@@ -6,7 +6,16 @@ from .const import DOMAIN
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
-    async_add_entities(HubOnline(coordinator, hub_id) for hub_id in coordinator.data)
+    known = set()
+
+    def add_new():
+        new = set(coordinator.data or {}) - known
+        if new:
+            async_add_entities(HubOnline(coordinator, hub_id) for hub_id in new)
+            known.update(new)
+
+    add_new()
+    entry.async_on_unload(coordinator.async_add_listener(add_new))
 
 class HubOnline(CoordinatorEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
