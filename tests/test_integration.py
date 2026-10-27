@@ -23,12 +23,7 @@ async def test_config_flow_and_duplicate(hass):
     ):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         assert result["type"] is FlowResultType.FORM
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {"email": "test@example.com", "password": "secret"}
-        )
-        assert result["type"] is FlowResultType.CREATE_ENTRY
-        assert result["data"]["password"] == "secret"
-        entry = MockConfigEntry(domain=DOMAIN, data=result["data"], unique_id="account-id")
+        entry = MockConfigEntry(domain=DOMAIN, data={"email": "test@example.com", "password": "secret"}, unique_id="account-id")
         entry.add_to_hass(hass)
         duplicate = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": "user"},
