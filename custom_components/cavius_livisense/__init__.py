@@ -40,6 +40,4 @@ def _register_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator: Livi
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded:
-        entry.async_unload(hass)
     return unloaded
