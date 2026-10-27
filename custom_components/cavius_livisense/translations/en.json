@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Cavius LiviSense",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Cavius LiviSense",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Cannot connect to Cavius cloud",
+      "unknown": "Unexpected response from Cavius cloud",
+      "wrong_account": "These credentials belong to a different account"
+    },
+    "abort": {
+      "already_configured": "Account is already configured",
+      "reauth_successful": "Account reconnected"
+    }
+  }
+}

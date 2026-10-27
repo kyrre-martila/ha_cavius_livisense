@@ -1,0 +1,10 @@
+{
+  "domain": "cavius_livisense",
+  "name": "Cavius LiviSense",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/kyrre-martila/ha_cavius_livisense",
+  "issue_tracker": "https://github.com/kyrre-martila/ha_cavius_livisense/issues",
+  "iot_class": "cloud_polling",
+  "requirements": []
+}
