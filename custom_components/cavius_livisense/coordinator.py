@@ -127,6 +127,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     elif code in (1659, 9421, 9422):
                         flags["smoke"] = False
                         self._recent_fire.pop(device_id, None)
+                        self.alarm_events[hub_id] = [alarm for alarm in self.alarm_events.get(hub_id, []) if self._targets(hub_id, alarm) not in ({device_id}, set())]
                     elif code in (1384, 3384):
                         flags["battery"] = code == 1384
                     elif code in (1381, 3381):
