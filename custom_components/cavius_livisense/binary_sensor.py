@@ -1,6 +1,7 @@
 """Verified hub online status."""
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
 
@@ -20,6 +21,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class HubOnline(CoordinatorEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_name = "Connectivity"
 
     def __init__(self, coordinator, hub_id):
@@ -32,8 +34,10 @@ class HubOnline(CoordinatorEntity, BinarySensorEntity):
     def available(self):
         if not self.coordinator.last_update_success or self.hub_id not in self.coordinator.data:
             return False
-        return isinstance(self.coordinator.data[self.hub_id]["hub"].get("state", {}).get("status"), str)
+        state = self.coordinator.data[self.hub_id]["hub"].get("state")
+        return isinstance(state, dict) and isinstance(state.get("status"), str)
 
     @property
     def is_on(self):
-        return self.coordinator.data[self.hub_id]["hub"].get("state", {}).get("status") == "online"
+        state = self.coordinator.data[self.hub_id]["hub"].get("state")
+        return isinstance(state, dict) and state.get("status") == "online"
