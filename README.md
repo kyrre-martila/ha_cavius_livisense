@@ -24,11 +24,11 @@ The integration discovers all hub IDs returned by the account profile and the `S
 - **Hub connectivity:** online only when the hub reports `state.status: "online"`. Other reported status values appear offline. The entity becomes unavailable if cloud synchronization fails.
 - **Last cloud update:** the documented `state.updatedAt` timestamp for each hub and detector, when present. Detector timestamps become unavailable when their parent hub is offline or cloud synchronization fails.
 
-The integration polls the documented REST API every five minutes. This interval is intended for diagnostics and is **not suitable for fire safety monitoring**.
+The integration listens for documented WebSocket state changes and polls the REST API every five minutes as a fallback. It reconnects after network failures and refreshes the REST snapshot after reconnecting. This is intended for diagnostics and is **not suitable for fire safety monitoring**.
 
 ## Known limitations
 
-- No WebSocket, fire alarm, warning, battery, or device control entities are implemented.
+- WebSocket event information is retained internally, but fire alarm detection and clearing, warning and battery entities, and device control are not implemented.
 - Battery percentage is not confirmed for `SMOKECAVIUS` detectors.
 - The cloud API is unofficial and may change without notice.
 - Internet and LiviSense cloud access are required. Cloud outages make current diagnostics unavailable.

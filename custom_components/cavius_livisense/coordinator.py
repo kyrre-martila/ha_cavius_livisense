@@ -1,6 +1,7 @@
 """Periodic cloud state and discovery."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -24,6 +25,54 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     def __init__(self, hass: HomeAssistant, client: LiviSenseClient) -> None:
         super().__init__(hass, logger=__import__("logging").getLogger(__name__), name=DOMAIN, update_interval=UPDATE_INTERVAL)
         self.client = client
+        self._state_lock = asyncio.Lock()
+        self.events: list[dict[str, Any]] = []
+
+    async def async_refresh(self) -> None:
+        async with self._state_lock:
+            await super().async_refresh()
+
+    async def async_apply_message(self, name: str, payload: Any) -> None:
+        """Merge only documented state fields; refresh ambiguous updates."""
+        if not isinstance(payload, dict):
+            return
+        if name == "hub:event":
+            self.events.append(payload.copy())
+            self.events = self.events[-100:]
+            return
+        if name in ("hub:updated", "device:updated"):
+            await self.async_request_refresh()
+            return
+        if name not in ("hub:state", "device:state"):
+            return
+        hub_ref = payload.get("hub")
+        if not isinstance(hub_ref, dict) or not isinstance(hub_ref.get("id"), str):
+            return
+        fields = ("alarm", "status", "mode", "updatedAt", "lastAlarmAt", "lastEventAt") if name == "hub:state" else ("alarm", "warning", "batteryLevel", "signalStrength", "updatedAt", "lastEventAt")
+        source = hub_ref.get("state") if name == "hub:state" else payload.get("state")
+        if not isinstance(source, dict):
+            return
+        changes = {key: source[key] for key in fields if key in source}
+        if not changes:
+            return
+        async with self._state_lock:
+            item = (self.data or {}).get(hub_ref["id"])
+            if not item:
+                return
+            target = item["hub"]
+            if name == "device:state":
+                ref = payload.get("device")
+                if not isinstance(ref, dict) or not isinstance(ref.get("id"), str):
+                    return
+                target = next((device for device in target.get("devices", []) if isinstance(device, dict) and device.get("id") == ref["id"]), None)
+                if target is None:
+                    await self.async_request_refresh()
+                    return
+            state = target.get("state")
+            if not isinstance(state, dict):
+                state = target["state"] = {}
+            state.update(changes)
+            self.async_set_updated_data(self.data)
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:

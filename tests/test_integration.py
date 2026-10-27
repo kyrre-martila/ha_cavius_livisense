@@ -54,6 +54,7 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hubs", return_value={"data": [{"id": "hub-id"}]}) as list_hubs,
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.health", return_value={"status": "ok", "issues": []}) as health,
+        patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
