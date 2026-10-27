@@ -1,5 +1,4 @@
 """Mocked detector alarm and fault state tests."""
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -61,9 +60,10 @@ async def test_fire_grace_and_fault_recovery(coordinator):
                              (1380, "trouble", True), (1389, "trouble", True)):
         await coordinator.async_apply_message("hub:event", event(code, {"id": "a"}))
         assert coordinator.flags["a"][key] is value
-    coordinator._recent_fire["a"] = datetime.now(timezone.utc) - timedelta(seconds=91)
     coordinator.request_alarm_reconciliation()
     await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is True
+    await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
     assert coordinator.alarm_state("hub", "a") is False
     assert coordinator.flags["a"]["trouble"] is True
 
@@ -80,3 +80,37 @@ async def test_unknown_offline_and_failed_refresh(coordinator):
     # Existing alarm flags survive reconnect/reload-style REST reconciliation.
     await coordinator.async_apply_message("hub:event", event(1384, {"id": "a"}))
     assert sensor.is_on is True
+
+
+@pytest.mark.asyncio
+async def test_specific_clear_preserves_other_and_ambiguous_alarms(coordinator):
+    coordinator.client.unacknowledged_alarms.return_value = [
+        {"code": 1110, "subject": {"id": "a"}},
+        {"code": 1110, "subject": {"id": "b"}},
+        {"code": 1111, "subject": {"id": "hub"}},
+    ]
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
+    assert coordinator.alarm_state("hub", "a") is False
+    assert coordinator.alarm_state("hub", "b") is True
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is False
+    assert coordinator.alarm_state("hub", "b") is True
+    await coordinator.async_apply_message("hub:event", event(9421))
+    assert coordinator.alarm_state("hub", "a") is False
+    assert coordinator.alarm_state("hub", "b") is False
+
+
+@pytest.mark.asyncio
+async def test_failed_reconciliation_preserves_fire(coordinator):
+    from custom_components.cavius_livisense.api import ApiError
+
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", event(1110, {"id": "a"}))
+    coordinator.client.unacknowledged_alarms.side_effect = ApiError("bad response")
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert not coordinator.last_update_success
+    assert coordinator.alarm_state("hub", "a") is True
+    assert not DetectorFlag(coordinator, "hub", "a", "smoke").available

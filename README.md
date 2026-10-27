@@ -28,7 +28,7 @@ The integration discovers all hub IDs returned by the account profile and the `S
 
 Each SMOKECAVIUS detector also has:
 
-- **Smoke alarm:** active for a non-null detector alarm state, a current unacknowledged alarm event, or a fire WebSocket event. Events with no identifiable detector flag all detectors on that hub. Documented clear events clear the WebSocket flag; a REST clear is accepted after a 90 second grace period. Unknown is shown until enough cloud data establishes a clear state.
+- **Smoke alarm:** active for a non-null detector alarm state, a current unacknowledged alarm event, or a fire WebSocket event. Events with no identifiable detector flag all detectors on that hub. Documented clear events clear the WebSocket flag; an absent REST event does not clear a WebSocket fire alarm. Unknown is shown until enough cloud data establishes a clear state.
 - **Battery low:** event based warning, cleared by the documented recovery event. Battery percentage is unavailable.
 - **Signal loss:** event based diagnostic, cleared by the documented recovery event.
 - **Sensor trouble:** diagnostic set by trouble or self-test failure events. The API documents no recovery event, so this state persists until integration reload.

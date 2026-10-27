@@ -30,7 +30,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self.events: list[dict[str, Any]] = []
         self.flags: dict[str, dict[str, bool]] = {}
         self.alarm_events: dict[str, list[dict[str, Any]]] = {}
-        self._recent_fire: dict[str, datetime] = {}
+        self._cleared_alarms: set[str] = set()
         self._last_alarm_fetch: datetime | None = None
         self.websocket_connected: bool | None = None
         self.last_websocket_message: datetime | None = None
@@ -123,11 +123,10 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     flags = self.flags.setdefault(device_id, {})
                     if code in (1110, 1111):
                         flags["smoke"] = True
-                        self._recent_fire[device_id] = datetime.now(timezone.utc)
+                        self._cleared_alarms.discard(device_id)
                     elif code in (1659, 9421, 9422):
                         flags["smoke"] = False
-                        self._recent_fire.pop(device_id, None)
-                        self.alarm_events[hub_id] = [alarm for alarm in self.alarm_events.get(hub_id, []) if self._targets(hub_id, alarm) not in ({device_id}, set())]
+                        self._cleared_alarms.add(device_id)
                     elif code in (1384, 3384):
                         flags["battery"] = code == 1384
                     elif code in (1381, 3381):
@@ -144,11 +143,14 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if device is None:
             return None
         state = device.get("state")
-        if isinstance(state, dict) and state.get("alarm") is not None:
+        flag = self.flags.get(device_id, {}).get("smoke")
+        if flag is True:
             return True
-        if self.flags.get(device_id, {}).get("smoke"):
+        if flag is not False and isinstance(state, dict) and state.get("alarm") is not None:
             return True
         for event in self.alarm_events.get(hub_id, []):
+            if flag is False and device_id in self._cleared_alarms:
+                continue
             if self._targets(hub_id, event) == {device_id}:
                 return True
             if not self._targets(hub_id, event):
@@ -181,11 +183,17 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 except ApiError as exc:
                     raise UpdateFailed(str(exc)) from exc
                 self.alarm_events = alarms
+                for hub_id, item in snapshot.items():
+                    for device in item["hub"]["devices"]:
+                        if not isinstance(device, dict):
+                            continue
+                        device_id = device.get("id")
+                        if device_id in self._cleared_alarms and not any(
+                            not self._targets(hub_id, event) or self._targets(hub_id, event) == {device_id}
+                            for event in alarms[hub_id]
+                        ):
+                            self._cleared_alarms.discard(device_id)
                 self._last_alarm_fetch = now
-                for device_id, received in list(self._recent_fire.items()):
-                    if now - received >= timedelta(seconds=90):
-                        self.flags.setdefault(device_id, {})["smoke"] = False
-                        del self._recent_fire[device_id]
             return snapshot
 
     def request_alarm_reconciliation(self) -> None:
