@@ -114,3 +114,80 @@ async def test_failed_reconciliation_preserves_fire(coordinator):
     assert not coordinator.last_update_success
     assert coordinator.alarm_state("hub", "a") is True
     assert not DetectorFlag(coordinator, "hub", "a", "smoke").available
+
+
+@pytest.mark.asyncio
+async def test_new_rest_alarm_after_clear_and_stale_alarm(coordinator):
+    old = {"id": "old", "code": 1110, "subject": {"id": "a"},
+           "happenedAt": "2026-01-01T10:00:00Z"}
+    other = {"id": "other", "code": 1110, "subject": {"id": "b"},
+             "happenedAt": "2026-01-01T10:00:00Z"}
+    coordinator.client.unacknowledged_alarms.return_value = [old, other]
+    await coordinator.async_refresh()
+    clear = event(1659, {"id": "a"})
+    clear["happenedAt"] = "2026-01-01T10:01:00Z"
+    await coordinator.async_apply_message("hub:event", clear)
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is False
+    assert coordinator.alarm_state("hub", "b") is True
+    new = {"id": "new", "code": 1110, "subject": {"id": "a"},
+           "happenedAt": "2026-01-01T10:02:00Z"}
+    coordinator.client.unacknowledged_alarms.return_value = [old, other, new]
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [9421, 9422])
+async def test_global_clear_with_delayed_rest_and_new_alarm(coordinator, code):
+    old = {"id": "old", "code": 1111, "subject": {"id": "hub"},
+           "happenedAt": "2026-01-01T10:00:00Z"}
+    coordinator.client.unacknowledged_alarms.return_value = [old]
+    await coordinator.async_refresh()
+    clear = event(code)
+    clear["happenedAt"] = "2026-01-01T10:01:00Z"
+    await coordinator.async_apply_message("hub:event", clear)
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is False
+    assert coordinator.alarm_state("hub", "b") is False
+    newer = {"id": "new", "code": 1111, "subject": {"id": "hub"},
+             "happenedAt": "2026-01-01T10:02:00Z"}
+    coordinator.client.unacknowledged_alarms.return_value = [old, newer]
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is True
+    assert coordinator.alarm_state("hub", "b") is True
+
+
+@pytest.mark.asyncio
+async def test_identity_fallback_and_failure_preserve_alarm(coordinator):
+    from custom_components.cavius_livisense.api import ApiError
+
+    old = {"id": "old", "subject": {"id": "a"}}
+    coordinator.client.unacknowledged_alarms.return_value = [old]
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is False
+    coordinator.client.unacknowledged_alarms.return_value = [old, {"id": "new", "subject": {"id": "a"}}]
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is True
+    coordinator.client.unacknowledged_alarms.side_effect = ApiError("malformed response")
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert not coordinator.last_update_success
+    assert coordinator.alarm_state("hub", "a") is True
+
+
+@pytest.mark.asyncio
+async def test_new_device_alarm_state_after_clear(coordinator):
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
+    coordinator.client.hub.return_value["data"]["devices"][0]["state"]["alarm"] = "fire"
+    await coordinator.async_refresh()
+    assert coordinator.alarm_state("hub", "a") is True

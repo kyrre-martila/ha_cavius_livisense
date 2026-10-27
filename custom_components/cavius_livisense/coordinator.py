@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -30,7 +31,8 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self.events: list[dict[str, Any]] = []
         self.flags: dict[str, dict[str, bool]] = {}
         self.alarm_events: dict[str, list[dict[str, Any]]] = {}
-        self._cleared_alarms: set[str] = set()
+        self._cleared_alarms: dict[str, tuple[datetime | None, set[str]]] = {}
+        self._cleared_device_states: dict[str, Any] = {}
         self._last_alarm_fetch: datetime | None = None
         self.websocket_connected: bool | None = None
         self.last_websocket_message: datetime | None = None
@@ -102,6 +104,35 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 return {ref["id"]}
         return set()
 
+    @staticmethod
+    def _event_time(event: dict[str, Any]) -> datetime | None:
+        value = event.get("happenedAt")
+        if not isinstance(value, str):
+            return None
+        try:
+            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return result.astimezone(timezone.utc) if result.tzinfo else None
+
+    @staticmethod
+    def _event_identity(event: dict[str, Any]) -> str:
+        # Prefer an event ID when supplied; otherwise preserve the complete record.
+        identifier = event.get("id")
+        if isinstance(identifier, str) and identifier:
+            return "id:" + identifier
+        return "record:" + json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
+
+    def _event_cleared(self, device_id: str, event: dict[str, Any]) -> bool:
+        clear = self._cleared_alarms.get(device_id)
+        if clear is None:
+            return False
+        clear_time, identities = clear
+        event_time = self._event_time(event)
+        if clear_time is not None and event_time is not None:
+            return event_time <= clear_time
+        return self._event_identity(event) in identities
+
     async def _apply_event(self, payload: dict[str, Any]) -> None:
         hub = payload.get("hub")
         event = payload.get("event")
@@ -123,10 +154,22 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     flags = self.flags.setdefault(device_id, {})
                     if code in (1110, 1111):
                         flags["smoke"] = True
-                        self._cleared_alarms.discard(device_id)
+                        self._cleared_alarms.pop(device_id, None)
+                        self._cleared_device_states.pop(device_id, None)
                     elif code in (1659, 9421, 9422):
                         flags["smoke"] = False
-                        self._cleared_alarms.add(device_id)
+                        previous = self._cleared_alarms.get(device_id)
+                        identities = set(previous[1]) if previous else set()
+                        identities.update(
+                            self._event_identity(alarm)
+                            for alarm in self.alarm_events.get(hub_id, [])
+                            if not self._targets(hub_id, alarm) or self._targets(hub_id, alarm) == {device_id}
+                        )
+                        self._cleared_alarms[device_id] = (self._event_time(payload), identities)
+                        device = next((d for d in self.data[hub_id]["hub"].get("devices", [])
+                                       if isinstance(d, dict) and d.get("id") == device_id), {})
+                        state = device.get("state")
+                        self._cleared_device_states[device_id] = state.get("alarm") if isinstance(state, dict) else None
                     elif code in (1384, 3384):
                         flags["battery"] = code == 1384
                     elif code in (1381, 3381):
@@ -146,10 +189,15 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         flag = self.flags.get(device_id, {}).get("smoke")
         if flag is True:
             return True
-        if flag is not False and isinstance(state, dict) and state.get("alarm") is not None:
-            return True
+        if isinstance(state, dict) and state.get("alarm") is not None:
+            if flag is not False or state["alarm"] != self._cleared_device_states.get(device_id):
+                return True
+            clear = self._cleared_alarms.get(device_id)
+            updated_at = state.get("updatedAt")
+            if clear and clear[0] is not None and isinstance(updated_at, (int, float)) and updated_at > clear[0].timestamp():
+                return True
         for event in self.alarm_events.get(hub_id, []):
-            if flag is False and device_id in self._cleared_alarms:
+            if flag is False and self._event_cleared(device_id, event):
                 continue
             if self._targets(hub_id, event) == {device_id}:
                 return True
@@ -183,16 +231,6 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 except ApiError as exc:
                     raise UpdateFailed(str(exc)) from exc
                 self.alarm_events = alarms
-                for hub_id, item in snapshot.items():
-                    for device in item["hub"]["devices"]:
-                        if not isinstance(device, dict):
-                            continue
-                        device_id = device.get("id")
-                        if device_id in self._cleared_alarms and not any(
-                            not self._targets(hub_id, event) or self._targets(hub_id, event) == {device_id}
-                            for event in alarms[hub_id]
-                        ):
-                            self._cleared_alarms.discard(device_id)
                 self._last_alarm_fetch = now
             return snapshot
 
