@@ -27,6 +27,7 @@ async def test_config_flow_and_duplicate(hass):
             data={"email": "test@example.com", "password": "secret"},
         )
         assert duplicate["type"] is FlowResultType.ABORT
+        await hass.config_entries.async_remove(entry.entry_id)
 
 
 @pytest.mark.asyncio
