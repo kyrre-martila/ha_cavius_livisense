@@ -191,3 +191,41 @@ async def test_new_device_alarm_state_after_clear(coordinator):
     coordinator.client.hub.return_value["data"]["devices"][0]["state"]["alarm"] = "fire"
     await coordinator.async_refresh()
     assert coordinator.alarm_state("hub", "a") is True
+
+
+@pytest.mark.asyncio
+async def test_updated_at_does_not_reactivate_cleared_state(coordinator):
+    device = coordinator.client.hub.return_value["data"]["devices"][0]
+    device["state"] = {"alarm": "fire", "updatedAt": 1767261600}
+    old = {"id": "old", "code": 1110, "subject": {"id": "a"},
+           "happenedAt": "2026-01-01T10:00:00Z"}
+    coordinator.client.unacknowledged_alarms.return_value = [old]
+    await coordinator.async_refresh()
+    sensor = DetectorFlag(coordinator, "hub", "a", "smoke")
+    assert sensor.is_on is True
+
+    clear = event(1659, {"id": "a"})
+    clear["happenedAt"] = "2026-01-01T10:01:00Z"
+    await coordinator.async_apply_message("hub:event", clear)
+    assert sensor.is_on is False
+
+    device["state"]["updatedAt"] = 1767261720
+    coordinator.request_alarm_reconciliation()
+    await coordinator.async_refresh()
+    assert sensor.is_on is False
+
+    device["state"]["alarm"] = "new fire"
+    await coordinator.async_refresh()
+    assert sensor.is_on is True
+
+
+@pytest.mark.asyncio
+async def test_new_fire_event_after_clear_with_unchanged_device_state(coordinator):
+    device = coordinator.client.hub.return_value["data"]["devices"][0]
+    device["state"] = {"alarm": "fire", "updatedAt": 1767261600}
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
+    sensor = DetectorFlag(coordinator, "hub", "a", "smoke")
+    assert sensor.is_on is False
+    await coordinator.async_apply_message("hub:event", event(1110, {"id": "a"}))
+    assert sensor.is_on is True

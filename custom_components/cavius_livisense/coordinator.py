@@ -192,10 +192,6 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if isinstance(state, dict) and state.get("alarm") is not None:
             if flag is not False or state["alarm"] != self._cleared_device_states.get(device_id):
                 return True
-            clear = self._cleared_alarms.get(device_id)
-            updated_at = state.get("updatedAt")
-            if clear and clear[0] is not None and isinstance(updated_at, (int, float)) and updated_at > clear[0].timestamp():
-                return True
         for event in self.alarm_events.get(hub_id, []):
             if flag is False and self._event_cleared(device_id, event):
                 continue
