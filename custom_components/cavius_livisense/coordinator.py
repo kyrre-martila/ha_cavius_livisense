@@ -4,9 +4,10 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ApiError, LiviSenseClient
+from .api import ApiError, AuthError, LiviSenseClient
 from .const import DOMAIN, UPDATE_INTERVAL
 
 
@@ -31,8 +32,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             ids = profile_data.get("hubIds", [])
             if not isinstance(ids, list):
                 raise ApiError("Malformed hub IDs")
-            listed = self.client.hubs
-            await listed()  # Confirm that account hub listing is accessible.
+            await self.client.hubs()  # Confirm that account hub listing is accessible.
             snapshot: dict[str, dict[str, Any]] = {}
             for hub_id in ids:
                 if not isinstance(hub_id, str) or not hub_id:
@@ -43,5 +43,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 health = await self.client.health(hub_id)
                 snapshot[hub_id] = {"hub": hub, "health": health}
             return snapshot
+        except AuthError as exc:
+            raise ConfigEntryAuthFailed from exc
         except ApiError as exc:
             raise UpdateFailed(str(exc)) from exc
