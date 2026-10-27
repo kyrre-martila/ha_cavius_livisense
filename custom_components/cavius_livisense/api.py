@@ -26,6 +26,7 @@ class LiviSenseClient:
         self.email = email
         self.password = password
         self._token: str | None = None
+        self._refresh_token: str | None = None
         self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
         self._auth_lock = asyncio.Lock()
 
@@ -37,6 +38,8 @@ class LiviSenseClient:
             if not isinstance(token, dict) or not isinstance(token.get("accessToken"), str) or not token["accessToken"] or not isinstance(user, dict):
                 raise ApiError("Malformed login response")
             self._token = token["accessToken"]
+            refresh = token.get("refreshToken")
+            self._refresh_token = refresh if isinstance(refresh, str) else None
             try:
                 expiry = token.get("expiresAt")
                 if isinstance(expiry, str):
