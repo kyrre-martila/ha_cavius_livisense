@@ -7,7 +7,7 @@ import pytest
 
 from custom_components.cavius_livisense.api import AuthError
 from custom_components.cavius_livisense.coordinator import LiviSenseCoordinator
-from custom_components.cavius_livisense.websocket import LiviSenseWebSocket
+from custom_components.cavius_livisense.websocket import LiviSenseWebSocket, _valid_application_message
 
 
 @pytest.mark.asyncio
@@ -187,3 +187,15 @@ async def test_stop_clears_connectivity_and_allows_restart():
     listener.start()
     await listener.stop()
     assert listener._task is None
+
+
+def test_documented_message_shapes():
+    assert _valid_application_message({"name": "user:loggedOut"})
+    assert _valid_application_message({"name": "user:loggedOut", "data": None})
+    assert _valid_application_message({"name": "hub:state", "data": {"hub": {"id": "hub", "state": {}}}})
+    assert _valid_application_message({"name": "hub:event", "data": {"hub": {"id": "hub"}, "event": {"code": 1604}}})
+    assert not _valid_application_message({"name": "hub:state", "data": []})
+    assert not _valid_application_message({"name": "hub:state", "data": {"hub": {"id": "hub"}}})
+    assert not _valid_application_message({"name": "ping", "data": {}})
+    assert not _valid_application_message({"name": "pong", "data": {}})
+    assert _valid_application_message({"name": "unknown:event", "data": {}})
