@@ -98,3 +98,36 @@ async def test_missing_optional_fields():
     del response["token"]["refreshToken"]
     client = api.LiviSenseClient(Session([(200, response)]), "a", "b")
     assert (await client.login())["id"] == "account-uuid"
+
+
+@pytest.mark.asyncio
+async def test_multiple_hubs_and_smoke_detector_discovery():
+    hub_a = {"data": {"id": "hub-a", "state": {"status": "online"}, "devices": [
+        {"id": "detector-a", "model": "SMOKECAVIUS", "name": "Kitchen", "state": {"updatedAt": 100}}
+    ]}}
+    hub_b = {"data": {"id": "hub-b", "state": {"status": "offline"}, "devices": []}}
+    session = Session([
+        (200, login_response()),
+        (200, {"hubIds": ["hub-a", "hub-b"]}),
+        (200, {"data": [{"id": "hub-a"}, {"id": "hub-b"}]}),
+        (200, hub_a),
+        (200, hub_b),
+    ])
+    client = api.LiviSenseClient(session, "a", "b")
+    profile = await client.profile()
+    assert profile["hubIds"] == ["hub-a", "hub-b"]
+    assert len((await client.hubs())["data"]) == 2
+    first = await client.hub("hub-a")
+    second = await client.hub("hub-b")
+    assert first["data"]["devices"][0]["model"] == "SMOKECAVIUS"
+    assert second["data"]["state"]["status"] == "offline"
+    assert [call[1].split("livi.cloud")[-1] for call in session.calls[1:]] == [
+        "/auth/user/profile", "/api/hubs?perPage=1000", "/api/hubs/hub-a", "/api/hubs/hub-b"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_malformed_login_response():
+    client = api.LiviSenseClient(Session([(200, {"token": {}, "user": {}})]), "a", "b")
+    with pytest.raises(api.ApiError):
+        await client.login()
