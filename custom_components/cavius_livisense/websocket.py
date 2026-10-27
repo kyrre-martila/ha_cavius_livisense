@@ -36,6 +36,7 @@ class LiviSenseWebSocket:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        self.coordinator.set_websocket_connected(False)
 
     async def _keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         while not ws.closed:
@@ -52,6 +53,8 @@ class LiviSenseWebSocket:
                 async with self.client.session.ws_connect(
                     WS_URL, params={"token": token}, heartbeat=None
                 ) as ws:
+                    self.coordinator.set_websocket_connected(True)
+                    _LOGGER.debug("LiviSense WebSocket connection established")
                     delay = 5
                     await self.coordinator.async_request_refresh()
                     keepalive = asyncio.create_task(self._keepalive(ws))
@@ -65,6 +68,10 @@ class LiviSenseWebSocket:
                                 if not isinstance(frame, dict) or not isinstance(frame.get("name"), str):
                                     continue
                                 name = frame["name"]
+                                if name in ("ping", "pong") or not isinstance(frame.get("data"), dict):
+                                    continue
+                                self.coordinator.record_websocket_message()
+                                _LOGGER.debug("LiviSense WebSocket message type: %s", name if name in ("hub:state", "device:state", "hub:updated", "device:updated", "hub:event", "user:loggedOut") else "other")
                                 if name == "user:loggedOut":
                                     self.client.invalidate_token()
                                     break
@@ -72,6 +79,8 @@ class LiviSenseWebSocket:
                             elif message.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE):
                                 break
                     finally:
+                        self.coordinator.set_websocket_connected(False)
+                        _LOGGER.debug("LiviSense WebSocket disconnected")
                         keepalive.cancel()
                         try:
                             await keepalive
@@ -92,5 +101,7 @@ class LiviSenseWebSocket:
                 _LOGGER.warning("LiviSense WebSocket connection failed")
             except Exception:
                 _LOGGER.warning("LiviSense WebSocket listener failed")
+            self.coordinator.set_websocket_connected(False)
+            _LOGGER.debug("LiviSense WebSocket reconnect scheduled in %s seconds", delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 300)

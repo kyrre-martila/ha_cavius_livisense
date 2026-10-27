@@ -149,3 +149,41 @@ async def test_websocket_first_then_rest_and_refresh_request(hass):
     await coordinator.async_refresh()
     assert coordinator.data["hub"]["hub"]["state"]["status"] == "offline"
     client.hub.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_diagnostics_transitions(hass):
+    coordinator = LiviSenseCoordinator(hass, MagicMock())
+    updates = MagicMock()
+    remove = coordinator.async_add_listener(updates)
+    assert coordinator.websocket_connected is None
+    assert coordinator.last_websocket_message is None
+    coordinator.set_websocket_connected(True)
+    coordinator.record_websocket_message()
+    first = coordinator.last_websocket_message
+    assert first.tzinfo is not None and first.utcoffset().total_seconds() == 0
+    coordinator.set_websocket_connected(False)
+    assert coordinator.websocket_connected is False
+    assert coordinator.last_websocket_message == first
+    coordinator.set_websocket_connected(True)
+    assert coordinator.websocket_connected is True
+    assert updates.call_count == 4
+    remove()
+    coordinator.set_websocket_connected(False)
+    assert updates.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_stop_clears_connectivity_and_allows_restart():
+    coordinator = MagicMock()
+    client = MagicMock()
+    listener = LiviSenseWebSocket(client, coordinator)
+    listener._run = AsyncMock()
+    listener.start()
+    await asyncio.sleep(0)
+    await listener.stop()
+    assert listener._task is None
+    coordinator.set_websocket_connected.assert_called_with(False)
+    listener.start()
+    await listener.stop()
+    assert listener._task is None

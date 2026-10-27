@@ -16,7 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities = []
         for hub_id, item in (coordinator.data or {}).items():
             if hub_id not in known:
-                entities.append(LastUpdate(coordinator, hub_id))
+                entities.extend((LastUpdate(coordinator, hub_id), LastWebSocketMessage(coordinator, hub_id)))
                 known.add(hub_id)
             for device in item["hub"].get("devices", []):
                 if isinstance(device, dict) and device.get("model") == "SMOKECAVIUS" and isinstance(device.get("id"), str) and device["id"] not in known:
@@ -74,3 +74,19 @@ class LastUpdate(CoordinatorEntity, SensorEntity):
             return datetime.fromtimestamp(value, tz=timezone.utc)
         except (ValueError, OverflowError, OSError):
             return None
+
+
+class LastWebSocketMessage(CoordinatorEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Last WebSocket message"
+
+    def __init__(self, coordinator, hub_id):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{hub_id}_last_websocket_message"
+        self._attr_device_info = {"identifiers": {(DOMAIN, hub_id)}}
+
+    @property
+    def native_value(self):
+        return self.coordinator.last_websocket_message

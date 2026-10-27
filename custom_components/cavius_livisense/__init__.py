@@ -35,11 +35,11 @@ def _register_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator: Livi
     registry = dr.async_get(hass)
     for hub_id, item in coordinator.data.items():
         hub = item["hub"]
-        registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, hub_id)}, name=hub.get("name"), manufacturer="Cavius", model=hub.get("model"), serial_number=hub.get("serialNo"))
+        hub_device = registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, hub_id)}, name=hub.get("name"), manufacturer="Cavius", model=hub.get("model"), serial_number=hub.get("serialNo"))
         for device in hub.get("devices", []):
             if not isinstance(device, dict) or device.get("model") != "SMOKECAVIUS" or not isinstance(device.get("id"), str):
                 continue
-            registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, device["id"])}, via_device=(DOMAIN, hub_id), name=device.get("name"), manufacturer="Cavius", model=device.get("model"), serial_number=device.get("serialNo"))
+            registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, device["id"])}, via_device_id=hub_device.id, name=device.get("name"), manufacturer="Cavius", model=device.get("model"), serial_number=device.get("serialNo"))
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await entry.runtime_data.websocket.stop()
