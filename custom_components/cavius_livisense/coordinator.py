@@ -150,7 +150,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         for event in self.alarm_events.get(hub_id, []):
             if self._targets(hub_id, event) == {device_id}:
                 return True
-            if not self._targets(hub_id, event) and self._event_code(event) in (1110, 1111):
+            if not self._targets(hub_id, event):
                 return True
         if device_id in self.flags and "smoke" in self.flags[device_id]:
             return False
