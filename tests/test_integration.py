@@ -1,5 +1,6 @@
 """Home Assistant integration tests with no live Cavius requests."""
 from unittest.mock import AsyncMock, patch
+import asyncio
 import threading
 
 import pytest
@@ -64,7 +65,7 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         await hass.async_stop()
         for thread in threading.enumerate():
             if "_run_safe_shutdown_loop" in thread.name:
-                thread.join(timeout=2)
+                await asyncio.to_thread(thread.join, 2)
 
 
 @pytest.mark.asyncio
