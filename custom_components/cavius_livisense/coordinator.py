@@ -28,10 +28,6 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._state_lock = asyncio.Lock()
         self.events: list[dict[str, Any]] = []
 
-    async def async_refresh(self) -> None:
-        async with self._state_lock:
-            await super().async_refresh()
-
     async def async_apply_message(self, name: str, payload: Any) -> None:
         """Merge only documented state fields; refresh ambiguous updates."""
         if not isinstance(payload, dict):
@@ -73,11 +69,18 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 if not isinstance(state, dict):
                     state = target["state"] = {}
                 state.update(changes)
-                self.async_set_updated_data(self.data)
+                # Keep the scheduled REST fallback timer intact.
+                self.async_update_listeners()
         if refresh:
             await self.async_request_refresh()
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
+        # All HA refresh paths call this hook. Hold the same lock used by WS
+        # merges until the snapshot is ready; HA assigns it without yielding.
+        async with self._state_lock:
+            return await self._fetch_snapshot()
+
+    async def _fetch_snapshot(self) -> dict[str, dict[str, Any]]:
         try:
             profile = await self.client.profile()
             profile_data = _unwrap(profile)

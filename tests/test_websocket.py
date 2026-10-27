@@ -108,28 +108,44 @@ async def test_auth_failure_requests_reauth_once():
 
 
 @pytest.mark.asyncio
-async def test_refresh_and_merge_are_serialized(hass):
+@pytest.mark.parametrize("refresh_path", ["scheduled", "manual"])
+async def test_refresh_and_merge_are_serialized(hass, refresh_path):
     client = MagicMock()
     coordinator = LiviSenseCoordinator(hass, client)
     coordinator.async_set_updated_data({"hub": {"hub": {"id": "hub", "state": {"status": "offline"}, "devices": []}}})
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def refresh_snapshot():
+    client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
+
+    async def hub_snapshot(_hub_id):
         entered.set()
         await release.wait()
-        coordinator.async_set_updated_data({"hub": {"hub": {"id": "hub", "state": {"status": "offline"}, "devices": []}}})
+        return {"data": {"id": "hub", "state": {"status": "offline"}, "devices": []}}
 
-    with patch("homeassistant.helpers.update_coordinator.DataUpdateCoordinator.async_refresh", side_effect=refresh_snapshot):
-        refresh = asyncio.create_task(coordinator.async_refresh())
-        await entered.wait()
-        merge = asyncio.create_task(coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "online"}}}))
-        await asyncio.sleep(0)
-        assert not merge.done()
-        release.set()
-        await asyncio.gather(refresh, merge)
+    client.hub = AsyncMock(side_effect=hub_snapshot)
+    refresh = asyncio.create_task(coordinator._async_refresh(scheduled=True) if refresh_path == "scheduled" else coordinator.async_refresh())
+    await entered.wait()
+    merge = asyncio.create_task(coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "online"}}}))
+    await asyncio.sleep(0)
+    assert not merge.done()
+    release.set()
+    await asyncio.gather(refresh, merge)
     assert coordinator.data["hub"]["hub"]["state"]["status"] == "online"
 
     coordinator.async_request_refresh = AsyncMock()
     await asyncio.wait_for(coordinator.async_apply_message("device:state", {"hub": {"id": "hub"}, "device": {"id": "missing"}, "state": {"updatedAt": 2}}), 1)
     coordinator.async_request_refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_websocket_first_then_rest_and_refresh_request(hass):
+    client = MagicMock()
+    client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
+    client.hub = AsyncMock(return_value={"data": {"id": "hub", "state": {"status": "offline"}, "devices": []}})
+    coordinator = LiviSenseCoordinator(hass, client)
+    coordinator.async_set_updated_data({"hub": {"hub": {"id": "hub", "state": {"status": "online"}, "devices": []}}})
+    await coordinator.async_apply_message("hub:updated", {"hub": {"id": "hub"}})
+    await coordinator.async_refresh()
+    assert coordinator.data["hub"]["hub"]["state"]["status"] == "offline"
+    client.hub.assert_awaited()
