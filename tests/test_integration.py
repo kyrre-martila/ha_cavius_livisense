@@ -17,7 +17,7 @@ def enable_custom_integrations(enable_custom_integrations):
 @pytest.mark.asyncio
 async def test_config_flow_and_duplicate(hass):
     user = {"id": "account-id", "email": "test@example.com"}
-    with patch("custom_components.cavius_livisense.config_flow.LiviSenseClient.login", return_value=user):
+    with (\n        patch("custom_components.cavius_livisense.config_flow.LiviSenseClient.login", return_value=user),\n        patch.object(hass.config_entries, "async_setup", return_value=True),\n    ):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         assert result["type"] is FlowResultType.FORM
         result = await hass.config_entries.flow.async_configure(
