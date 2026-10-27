@@ -12,7 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     def add_new():
         new = set(coordinator.data or {}) - known
         if new:
-            async_add_entities(HubOnline(coordinator, hub_id) for hub_id in new)
+            async_add_entities(entity for hub_id in new for entity in (HubOnline(coordinator, hub_id), WebSocketConnectivity(coordinator, hub_id)))
             known.update(new)
 
     add_new()
@@ -41,3 +41,19 @@ class HubOnline(CoordinatorEntity, BinarySensorEntity):
     def is_on(self):
         state = self.coordinator.data[self.hub_id]["hub"].get("state")
         return isinstance(state, dict) and state.get("status") == "online"
+
+
+class WebSocketConnectivity(CoordinatorEntity, BinarySensorEntity):
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "WebSocket connectivity"
+
+    def __init__(self, coordinator, hub_id):
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{hub_id}_websocket_connectivity"
+        self._attr_device_info = {"identifiers": {(DOMAIN, hub_id)}}
+
+    @property
+    def is_on(self):
+        return self.coordinator.websocket_connected

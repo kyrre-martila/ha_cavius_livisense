@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -27,6 +28,17 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self.client = client
         self._state_lock = asyncio.Lock()
         self.events: list[dict[str, Any]] = []
+        self.websocket_connected: bool | None = None
+        self.last_websocket_message: datetime | None = None
+
+    def set_websocket_connected(self, connected: bool) -> None:
+        if self.websocket_connected != connected:
+            self.websocket_connected = connected
+            self.async_update_listeners()
+
+    def record_websocket_message(self) -> None:
+        self.last_websocket_message = datetime.now(timezone.utc)
+        self.async_update_listeners()
 
     async def async_apply_message(self, name: str, payload: Any) -> None:
         """Merge only documented state fields; refresh ambiguous updates."""

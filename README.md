@@ -22,6 +22,8 @@ The integration discovers all hub IDs returned by the account profile and the `S
 ## Current entities
 
 - **Hub connectivity:** online only when the hub reports `state.status: "online"`. Other reported status values appear offline. The entity becomes unavailable if cloud synchronization fails.
+- **WebSocket connectivity:** on while the cloud WebSocket is established; off during disconnect and reconnect. Unknown before its status is known. This does not establish physical hub or detector connectivity.
+- **Last WebSocket message:** UTC time of the last valid incoming application message. Unknown until one arrives. A connected socket can have no recent application activity.
 - **Last cloud update:** the documented `state.updatedAt` timestamp for each hub and detector, when present. Detector timestamps become unavailable when their parent hub is offline or cloud synchronization fails.
 
 The integration listens for documented WebSocket state changes and polls the REST API every five minutes as a fallback. It reconnects after network failures and refreshes the REST snapshot after reconnecting. This is intended for diagnostics and is **not suitable for fire safety monitoring**.
