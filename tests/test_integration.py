@@ -55,6 +55,8 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         coordinator = entry.runtime_data
         assert coordinator.data["hub-id"]["hub"]["devices"][0]["id"] == "smoke-id"
         assert coordinator.data["hub-id"]["hub"]["state"]["status"] == "offline"
+        assert hass.states.get("binary_sensor.home_connectivity").state == "off"
+        assert hass.states.get("sensor.kitchen_last_cloud_update").state == "unavailable"
         assert await hass.config_entries.async_unload(entry.entry_id)
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
