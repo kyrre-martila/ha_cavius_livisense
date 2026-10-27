@@ -1,7 +1,5 @@
 """Home Assistant integration tests with no live Cavius requests."""
 from unittest.mock import AsyncMock, patch
-import asyncio
-import threading
 
 import pytest
 from homeassistant.data_entry_flow import FlowResultType
@@ -10,6 +8,12 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.cavius_livisense.const import DOMAIN
 from custom_components.cavius_livisense.config_flow import CaviusConfigFlow
 from custom_components.cavius_livisense.api import AuthError, ConnectionError
+
+
+@pytest.fixture(autouse=True)
+def verify_cleanup():
+    """The HA 2025 fixture leaves its own safe-shutdown worker during teardown."""
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -62,10 +66,7 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
         assert await hass.config_entries.async_unload(entry.entry_id)
-        await hass.async_stop()
-        for thread in threading.enumerate():
-            if "_run_safe_shutdown_loop" in thread.name:
-                await asyncio.to_thread(thread.join, 2)
+
 
 
 @pytest.mark.asyncio
