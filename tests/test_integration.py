@@ -60,6 +60,7 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
         assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_stop()
 
 
 @pytest.mark.asyncio
