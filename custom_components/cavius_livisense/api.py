@@ -81,6 +81,17 @@ class LiviSenseClient:
     async def profile(self) -> dict[str, Any]:
         return await self._request("GET", "/auth/user/profile")
 
+    async def access_token(self) -> str:
+        """Return a current token using the existing login lifecycle."""
+        if not self._token or datetime.now(timezone.utc) >= self._expires_at - timedelta(hours=1):
+            await self.login()
+        assert self._token is not None
+        return self._token
+
+    def invalidate_token(self) -> None:
+        """Force login before the next authenticated request."""
+        self._token = None
+
     async def hubs(self) -> dict[str, Any]:
         return await self._request("GET", "/api/hubs?perPage=1000")
 

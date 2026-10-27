@@ -10,6 +10,7 @@ from homeassistant.helpers import device_registry as dr
 from .api import AuthError, ConnectionError, LiviSenseClient
 from .const import DOMAIN, PLATFORMS
 from .coordinator import LiviSenseCoordinator
+from .websocket import LiviSenseWebSocket
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = LiviSenseClient(async_get_clientsession(hass), entry.data["email"], entry.data["password"])
@@ -23,6 +24,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = coordinator
     _register_devices(hass, entry, coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    coordinator.websocket = LiviSenseWebSocket(client, coordinator, entry)
+    coordinator.websocket.start()
     entry.async_on_unload(coordinator.async_add_listener(lambda: _register_devices(hass, entry, coordinator)))
     return True
 
@@ -39,5 +42,6 @@ def _register_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator: Livi
             registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, device["id"])}, via_device=(DOMAIN, hub_id), name=device.get("name"), manufacturer="Cavius", model=device.get("model"), serial_number=device.get("serialNo"))
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    await entry.runtime_data.websocket.stop()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     return unloaded
