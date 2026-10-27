@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
 
@@ -29,6 +30,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class LastUpdate(CoordinatorEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_name = "Last cloud update"
 
     def __init__(self, coordinator, hub_id, device_id=None):
@@ -43,9 +45,11 @@ class LastUpdate(CoordinatorEntity, SensorEntity):
         if not self.coordinator.last_update_success or self.hub_id not in self.coordinator.data:
             return False
         hub = self.coordinator.data[self.hub_id]["hub"]
-        if hub.get("state", {}).get("status") != "online":
+        hub_state = hub.get("state")
+        if not isinstance(hub_state, dict) or hub_state.get("status") != "online":
             return False
-        return self._state() is not None
+        state = self._state()
+        return isinstance(state, dict) and isinstance(state.get("updatedAt"), (int, float))
 
     def _state(self):
         hub = self.coordinator.data[self.hub_id]["hub"]
