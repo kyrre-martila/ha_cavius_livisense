@@ -6,6 +6,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cavius_livisense.const import DOMAIN
+from custom_components.cavius_livisense.api import AuthError, ConnectionError
 
 
 @pytest.fixture(autouse=True)
@@ -61,3 +62,12 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         assert await hass.config_entries.async_unload(entry.entry_id)
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "message"), [(AuthError, "invalid_auth"), (ConnectionError, "cannot_connect")])
+async def test_config_flow_errors(hass, error, message):
+    with patch("custom_components.cavius_livisense.config_flow.LiviSenseClient.login", side_effect=error()):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"}, data={"email": "test@example.com", "password": "secret"})
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"]["base"] == message
