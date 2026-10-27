@@ -67,10 +67,10 @@ class LiviSenseClient:
                 if response.status >= 400:
                     raise ApiError(f"Cloud returned HTTP {response.status}")
                 data = await response.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            raise ConnectionError("Cloud connection failed") from exc
         except (ValueError, aiohttp.ContentTypeError) as exc:
             raise ApiError("Invalid JSON response") from exc
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise ConnectionError("Cloud connection failed") from exc
         if not isinstance(data, dict):
             raise ApiError("Expected JSON object")
         return data
