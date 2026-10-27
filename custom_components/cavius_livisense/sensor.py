@@ -8,13 +8,23 @@ from .const import DOMAIN
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
-    entities = []
-    for hub_id, item in coordinator.data.items():
-        entities.append(LastUpdate(coordinator, hub_id))
-        for device in item["hub"].get("devices", []):
-            if isinstance(device, dict) and device.get("model") == "SMOKECAVIUS" and isinstance(device.get("id"), str):
-                entities.append(LastUpdate(coordinator, hub_id, device["id"]))
-    async_add_entities(entities)
+    known = set()
+
+    def add_new():
+        entities = []
+        for hub_id, item in (coordinator.data or {}).items():
+            if hub_id not in known:
+                entities.append(LastUpdate(coordinator, hub_id))
+                known.add(hub_id)
+            for device in item["hub"].get("devices", []):
+                if isinstance(device, dict) and device.get("model") == "SMOKECAVIUS" and isinstance(device.get("id"), str) and device["id"] not in known:
+                    entities.append(LastUpdate(coordinator, hub_id, device["id"]))
+                    known.add(device["id"])
+        if entities:
+            async_add_entities(entities)
+
+    add_new()
+    entry.async_on_unload(coordinator.async_add_listener(add_new))
 
 class LastUpdate(CoordinatorEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
