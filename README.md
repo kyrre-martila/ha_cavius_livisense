@@ -2,7 +2,7 @@
 
 Unofficial Home Assistant custom integration for Cavius smoke detectors connected through a LiviSense MHub.
 
-> **Early development:** This integration provides cloud discovery and limited diagnostics. It does not detect or clear fire alarms.
+> **Early development:** This integration exposes cloud reported alarm and fault states. It is not a certified safety monitor.
 
 ## Install with HACS
 
@@ -26,11 +26,20 @@ The integration discovers all hub IDs returned by the account profile and the `S
 - **Last WebSocket message:** UTC time of the last valid incoming application message. Unknown until one arrives. A connected socket can have no recent application activity.
 - **Last cloud update:** the documented `state.updatedAt` timestamp for each hub and detector, when present. Detector timestamps become unavailable when their parent hub is offline or cloud synchronization fails.
 
+Each SMOKECAVIUS detector also has:
+
+- **Smoke alarm:** active for a non-null detector alarm state, a current unacknowledged alarm event, or a fire WebSocket event. Events with no identifiable detector flag all detectors on that hub. Documented clear events clear the WebSocket flag; a REST clear is accepted after a 90 second grace period. Unknown is shown until enough cloud data establishes a clear state.
+- **Battery low:** event based warning, cleared by the documented recovery event. Battery percentage is unavailable.
+- **Signal loss:** event based diagnostic, cleared by the documented recovery event.
+- **Sensor trouble:** diagnostic set by trouble or self-test failure events. The API documents no recovery event, so this state persists until integration reload.
+
+Alarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Event flags persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across Home Assistant restarts.
+
 The integration listens for documented WebSocket state changes and polls the REST API every five minutes as a fallback. It reconnects after network failures and refreshes the REST snapshot after reconnecting. This is intended for diagnostics and is **not suitable for fire safety monitoring**.
 
 ## Known limitations
 
-- WebSocket event information is retained internally, but fire alarm detection and clearing, warning and battery entities, and device control are not implemented.
+- Fire event payload shape is not verified against a real fire. Hub-level events without a detector ID are attributed to every detector on that hub. The integration is read-only.
 - Battery percentage is not confirmed for `SMOKECAVIUS` detectors.
 - The cloud API is unofficial and may change without notice.
 - Internet and LiviSense cloud access are required. Cloud outages make current diagnostics unavailable.
