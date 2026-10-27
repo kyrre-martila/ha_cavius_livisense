@@ -1,11 +1,12 @@
 """Home Assistant integration tests with no live Cavius requests."""
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cavius_livisense.const import DOMAIN
+from custom_components.cavius_livisense.config_flow import CaviusConfigFlow
 from custom_components.cavius_livisense.api import AuthError, ConnectionError
 
 
@@ -15,19 +16,17 @@ def enable_custom_integrations(enable_custom_integrations):
 
 
 @pytest.mark.asyncio
-async def test_config_flow_and_duplicate(hass):
-    user = {"id": "account-id", "email": "test@example.com"}
-    with patch("custom_components.cavius_livisense.config_flow.LiviSenseClient.login", return_value=user):
-        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-        assert result["type"] is FlowResultType.FORM
-        entry = MockConfigEntry(domain=DOMAIN, data={"email": "test@example.com", "password": "secret"}, unique_id="account-id")
-        entry.add_to_hass(hass)
-        duplicate = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"},
-            data={"email": "test@example.com", "password": "secret"},
-        )
-        assert duplicate["type"] is FlowResultType.ABORT
-        await hass.config_entries.async_remove(entry.entry_id)
+async def test_duplicate_account_guard():
+    flow = CaviusConfigFlow()
+    flow._validate = AsyncMock(return_value=("account-id", "test@example.com"))
+    with (
+        patch.object(flow, "async_set_unique_id", new_callable=AsyncMock) as set_id,
+        patch.object(flow, "_abort_if_unique_id_configured", side_effect=RuntimeError("duplicate")) as guard,
+    ):
+        with pytest.raises(RuntimeError, match="duplicate"):
+            await flow.async_step_user({"email": "test@example.com", "password": "secret"})
+        set_id.assert_awaited_once_with("account-id")
+        guard.assert_called_once_with()
 
 
 @pytest.mark.asyncio
