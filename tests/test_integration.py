@@ -51,13 +51,15 @@ async def test_setup_unload_reload_and_offline_hub(hass):
     }}
     with (
         patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["hub-id"]}),
-        patch("custom_components.cavius_livisense.api.LiviSenseClient.hubs", return_value={"data": [{"id": "hub-id"}]}),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.hubs", return_value={"data": [{"id": "hub-id"}]}) as list_hubs,
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub),
-        patch("custom_components.cavius_livisense.api.LiviSenseClient.health", return_value={"status": "ok", "issues": []}),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.health", return_value={"status": "ok", "issues": []}) as health,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
         coordinator = entry.runtime_data
+        list_hubs.assert_not_awaited()
+        health.assert_not_awaited()
         assert coordinator.data["hub-id"]["hub"]["devices"][0]["id"] == "smoke-id"
         assert coordinator.data["hub-id"]["hub"]["state"]["status"] == "offline"
         assert hass.states.get("binary_sensor.home_connectivity").state == "off"

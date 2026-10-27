@@ -1,5 +1,6 @@
 """Documented diagnostic timestamps for hubs and detectors."""
 from datetime import datetime, timezone
+import math
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -49,10 +50,13 @@ class LastUpdate(CoordinatorEntity, SensorEntity):
         if not isinstance(hub_state, dict) or hub_state.get("status") != "online":
             return False
         state = self._state()
-        return isinstance(state, dict) and isinstance(state.get("updatedAt"), (int, float))
+        return isinstance(state, dict) and self.native_value is not None
 
     def _state(self):
-        hub = self.coordinator.data[self.hub_id]["hub"]
+        item = (self.coordinator.data or {}).get(self.hub_id)
+        if item is None:
+            return None
+        hub = item["hub"]
         if self.device_id is None:
             return hub.get("state") if isinstance(hub.get("state"), dict) else None
         for device in hub.get("devices", []):
@@ -64,7 +68,7 @@ class LastUpdate(CoordinatorEntity, SensorEntity):
     def native_value(self):
         state = self._state()
         value = state.get("updatedAt") if state else None
-        if not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             return None
         try:
             return datetime.fromtimestamp(value, tz=timezone.utc)

@@ -35,7 +35,7 @@ class HubOnline(CoordinatorEntity, BinarySensorEntity):
         if not self.coordinator.last_update_success or self.hub_id not in self.coordinator.data:
             return False
         state = self.coordinator.data[self.hub_id]["hub"].get("state")
-        return isinstance(state, dict) and isinstance(state.get("status"), str)
+        return isinstance(state, dict) and isinstance(state.get("status"), str) and bool(state["status"])
 
     @property
     def is_on(self):
