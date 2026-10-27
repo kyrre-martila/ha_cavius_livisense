@@ -20,7 +20,7 @@ def _unwrap(response: dict[str, Any]) -> dict[str, Any]:
 
 
 class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
-    """Fetch complete snapshots; a future WebSocket listener can request refreshes."""
+    """Serialize REST snapshots and WebSocket state updates."""
 
     def __init__(self, hass: HomeAssistant, client: LiviSenseClient) -> None:
         super().__init__(hass, logger=__import__("logging").getLogger(__name__), name=DOMAIN, update_interval=UPDATE_INTERVAL)
@@ -55,6 +55,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         changes = {key: source[key] for key in fields if key in source}
         if not changes:
             return
+        refresh = False
         async with self._state_lock:
             item = (self.data or {}).get(hub_ref["id"])
             if not item:
@@ -66,13 +67,15 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     return
                 target = next((device for device in target.get("devices", []) if isinstance(device, dict) and device.get("id") == ref["id"]), None)
                 if target is None:
-                    await self.async_request_refresh()
-                    return
-            state = target.get("state")
-            if not isinstance(state, dict):
-                state = target["state"] = {}
-            state.update(changes)
-            self.async_set_updated_data(self.data)
+                    refresh = True
+            if not refresh:
+                state = target.get("state")
+                if not isinstance(state, dict):
+                    state = target["state"] = {}
+                state.update(changes)
+                self.async_set_updated_data(self.data)
+        if refresh:
+            await self.async_request_refresh()
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:

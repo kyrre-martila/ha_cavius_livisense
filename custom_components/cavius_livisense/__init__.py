@@ -24,7 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = coordinator
     _register_devices(hass, entry, coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    coordinator.websocket = LiviSenseWebSocket(client, coordinator)
+    coordinator.websocket = LiviSenseWebSocket(client, coordinator, entry)
     coordinator.websocket.start()
     entry.async_on_unload(coordinator.async_add_listener(lambda: _register_devices(hass, entry, coordinator)))
     return True
