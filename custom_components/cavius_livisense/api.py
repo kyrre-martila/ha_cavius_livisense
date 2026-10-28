@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 
@@ -102,3 +103,11 @@ class LiviSenseClient:
     async def health(self, hub_id: str) -> dict[str, Any]:
         from urllib.parse import quote
         return await self._request("GET", f"/api/hubs/{quote(hub_id, safe='')}/health")
+
+    async def unacknowledged_alarms(self, hub_id: str) -> list[dict[str, Any]]:
+        """Return only current unacknowledged alarm events."""
+        response = await self._request("GET", f"/api/hubs/{quote(hub_id, safe='')}/events", params={"perPage": 300, "filter": '{"category":"alarm","isAcknowledged":false}'})
+        events = response.get("data")
+        if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
+            raise ApiError("Malformed alarm events")
+        return events

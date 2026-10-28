@@ -81,6 +81,7 @@ class LiviSenseWebSocket:
                     WS_URL, params={"token": token}, heartbeat=None
                 ) as ws:
                     delay = 5
+                    self.coordinator.request_alarm_reconciliation()
                     await self.coordinator.async_request_refresh()
                     keepalive = asyncio.create_task(self._keepalive(ws))
                     try:
