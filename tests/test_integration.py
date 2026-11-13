@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cavius_livisense.const import DOMAIN
@@ -89,3 +90,37 @@ async def test_config_flow_errors(hass, error, message):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"}, data={"email": "test@example.com", "password": "secret"})
         assert result["type"] is FlowResultType.FORM
         assert result["errors"]["base"] == message
+
+
+@pytest.mark.asyncio
+async def test_standard_diagnostics_download(hass, hass_client):
+    entry = MockConfigEntry(domain=DOMAIN, title="Private account", data={
+        "email": "private@example.com", "password": "private-password"})
+    entry.add_to_hass(hass)
+    hub = {"id": "private-hub", "name": "Private home", "devices": [
+        {"id": "private-heat", "model": "TEST_HEAT", "type": "TestHeatType"},
+        {"id": "private-remote", "model": "TEST_REMOTE", "type": "TestRemoteType"},
+    ]}
+    with (
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["private-hub"]}) as profile,
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub) as get_hub,
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[]),
+        patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        assert await async_setup_component(hass, "diagnostics", {})
+        await hass.async_block_till_done()
+        profile.reset_mock()
+        get_hub.reset_mock()
+        client = await hass_client()
+        response = await client.get(f"/api/diagnostics/config_entry/{entry.entry_id}")
+        assert response.status == 200
+        assert "attachment" in response.headers["Content-Disposition"]
+        result = await response.json()
+        assert result["data"]["hub_count"] == 1
+        assert result["data"]["hubs"][0]["device_count"] == 2
+        assert [d["model"] for d in result["data"]["hubs"][0]["devices"]] == ["TEST_HEAT", "TEST_REMOTE"]
+        assert "private" not in str(result["data"]).lower()
+        profile.assert_not_awaited()
+        get_hub.assert_not_awaited()
+        assert await hass.config_entries.async_unload(entry.entry_id)

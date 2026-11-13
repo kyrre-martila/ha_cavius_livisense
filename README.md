@@ -54,3 +54,17 @@ Special thanks to **André Rovik**, developer of the unofficial [Cavius Alarms a
 ## Disclaimer
 
 This is an independent, community-developed project. It is not affiliated with, endorsed by, or supported by Cavius or the LiviSense platform operators. All trademarks and product names belong to their respective owners.
+
+## Download discovery diagnostics
+
+Open **Settings → Devices & services → Cavius LiviSense**, open the integration
+entry's three-dot menu and select **Download diagnostics**. Share the downloaded
+file when troubleshooting missing devices. It includes counts and model/type
+metadata for every cached device, including unsupported devices, plus state field
+names without values. Downloading does not contact the cloud or refresh data.
+
+Credentials, device/hub names and identifiers are excluded. Unrecognized or
+potentially identifying strings are redacted; numeric model/type codes are also
+redacted conservatively. `extras.appDeviceId` is included only when it exactly
+matches the safe `type-model` pair. Heat detectors and remotes do not yet create
+entities.
