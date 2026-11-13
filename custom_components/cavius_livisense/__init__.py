@@ -1,6 +1,8 @@
 """Cavius LiviSense integration."""
 from __future__ import annotations
 
+from inspect import signature
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
@@ -33,13 +35,18 @@ def _register_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator: Livi
     if not coordinator.last_update_success:
         return
     registry = dr.async_get(hass)
+    supports_via_device_id = "via_device_id" in signature(registry.async_get_or_create).parameters
     for hub_id, item in coordinator.data.items():
         hub = item["hub"]
-        registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, hub_id)}, name=hub.get("name"), manufacturer="Cavius", model=hub.get("model"), serial_number=hub.get("serialNo"))
+        hub_device = registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, hub_id)}, name=hub.get("name"), manufacturer="Cavius", model=hub.get("model"), serial_number=hub.get("serialNo"))
         for device in hub.get("devices", []):
             if not isinstance(device, dict) or device.get("model") not in SUPPORTED_MODELS or not isinstance(device.get("id"), str):
                 continue
-            registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, device["id"])}, via_device=(DOMAIN, hub_id), name=device.get("name"), manufacturer="Cavius", model=device.get("model"), serial_number=device.get("serialNo"))
+            relationship = {"via_device_id": hub_device.id} if supports_via_device_id else {}
+            device_entry = registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, device["id"])}, name=device.get("name"), manufacturer="Cavius", model=device.get("model"), serial_number=device.get("serialNo"), **relationship)
+            # HA 2025.1 accepts the registry ID only through async_update_device.
+            if not supports_via_device_id and device_entry.via_device_id != hub_device.id:
+                registry.async_update_device(device_entry.id, via_device_id=hub_device.id)
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await entry.runtime_data.websocket.stop()
