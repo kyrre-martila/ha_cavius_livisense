@@ -6,7 +6,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN
+from .const import DOMAIN, SUPPORTED_MODELS
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
@@ -19,7 +19,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 entities.extend((LastUpdate(coordinator, hub_id), LastWebSocketMessage(coordinator, hub_id)))
                 known.add(hub_id)
             for device in item["hub"].get("devices", []):
-                if isinstance(device, dict) and device.get("model") == "SMOKECAVIUS" and isinstance(device.get("id"), str) and device["id"] not in known:
+                if isinstance(device, dict) and device.get("model") in SUPPORTED_MODELS and isinstance(device.get("id"), str) and device["id"] not in known:
                     entities.append(LastUpdate(coordinator, hub_id, device["id"]))
                     known.add(device["id"])
         if entities:
