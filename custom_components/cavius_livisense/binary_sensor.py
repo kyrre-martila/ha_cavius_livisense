@@ -3,7 +3,7 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN
+from .const import DOMAIN, FIRE_DETECTOR_MODELS
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
@@ -21,13 +21,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities = []
         for hub_id, item in (coordinator.data or {}).items():
             for device in item["hub"].get("devices", []):
-                if not isinstance(device, dict) or device.get("model") != "SMOKECAVIUS" or not isinstance(device.get("id"), str):
+                if not isinstance(device, dict) or device.get("model") not in FIRE_DETECTOR_MODELS or not isinstance(device.get("id"), str):
                     continue
                 device_id = device["id"]
                 if device_id in detector_known:
                     continue
                 detector_known.add(device_id)
-                entities.extend(DetectorFlag(coordinator, hub_id, device_id, key) for key in ("smoke", "battery", "signal", "trouble"))
+                alarm_key = "heat" if device["model"] == "HEATCAVIUS" else "smoke"
+                entities.extend(DetectorFlag(coordinator, hub_id, device_id, key) for key in (alarm_key, "battery", "signal", "trouble"))
         if entities:
             async_add_entities(entities)
 
@@ -89,9 +90,9 @@ class DetectorFlag(CoordinatorEntity, BinarySensorEntity):
         self.key = key
         self._attr_unique_id = f"{device_id}_{key}"
         self._attr_device_info = {"identifiers": {(DOMAIN, device_id)}}
-        self._attr_name = {"smoke": "Smoke alarm", "battery": "Battery low", "signal": "Signal loss", "trouble": "Sensor trouble"}[key]
-        self._attr_device_class = {"smoke": BinarySensorDeviceClass.SMOKE, "battery": BinarySensorDeviceClass.BATTERY, "signal": BinarySensorDeviceClass.PROBLEM, "trouble": BinarySensorDeviceClass.PROBLEM}[key]
-        if key != "smoke":
+        self._attr_name = {"heat": "Heat alarm", "smoke": "Smoke alarm", "battery": "Battery low", "signal": "Signal loss", "trouble": "Sensor trouble"}[key]
+        self._attr_device_class = {"heat": BinarySensorDeviceClass.HEAT, "smoke": BinarySensorDeviceClass.SMOKE, "battery": BinarySensorDeviceClass.BATTERY, "signal": BinarySensorDeviceClass.PROBLEM, "trouble": BinarySensorDeviceClass.PROBLEM}[key]
+        if key not in ("smoke", "heat"):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
@@ -99,10 +100,12 @@ class DetectorFlag(CoordinatorEntity, BinarySensorEntity):
         if not self.coordinator.last_update_success:
             return False
         item = (self.coordinator.data or {}).get(self.hub_id)
-        return bool(item and item["hub"].get("state", {}).get("status") == "online")
+        state = item["hub"].get("state") if item else None
+        return (isinstance(state, dict) and state.get("status") == "online"
+                and self.device_id in self.coordinator._detectors(self.hub_id))
 
     @property
     def is_on(self):
-        if self.key == "smoke":
+        if self.key in ("smoke", "heat"):
             return self.coordinator.alarm_state(self.hub_id, self.device_id)
         return self.coordinator.flags.get(self.device_id, {}).get(self.key)

@@ -11,7 +11,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ApiError, AuthError, LiviSenseClient
-from .const import DOMAIN, UPDATE_INTERVAL
+from .const import DOMAIN, UPDATE_INTERVAL, FIRE_DETECTOR_MODELS
 
 
 def _unwrap(response: dict[str, Any]) -> dict[str, Any]:
@@ -63,7 +63,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         hub_ref = payload.get("hub")
         if not isinstance(hub_ref, dict) or not isinstance(hub_ref.get("id"), str):
             return
-        fields = ("alarm", "status", "mode", "updatedAt", "lastAlarmAt", "lastEventAt") if name == "hub:state" else ("alarm", "warning", "batteryLevel", "signalStrength", "updatedAt", "lastEventAt")
+        fields = ("alarm", "status", "mode", "updatedAt", "lastAlarmAt", "lastEventAt") if name == "hub:state" else ("alarm", "warning", "batteryLevel", "signalStrength", "updatedAt", "lastEventAt", "lastWarningAt")
         source = hub_ref.get("state") if name == "hub:state" else payload.get("state")
         if not isinstance(source, dict):
             return
@@ -95,14 +95,19 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
     def _detectors(self, hub_id: str) -> set[str]:
         hub = (self.data or {}).get(hub_id, {}).get("hub", {})
-        return {device["id"] for device in hub.get("devices", []) if isinstance(device, dict) and device.get("model") == "SMOKECAVIUS" and isinstance(device.get("id"), str)}
+        return {device["id"] for device in hub.get("devices", []) if isinstance(device, dict) and device.get("model") in FIRE_DETECTOR_MODELS and isinstance(device.get("id"), str)}
+
+    @staticmethod
+    def _device_reference(hub_id: str, event: dict[str, Any]) -> str | None:
+        """Distinguish an explicit device (even unsupported) from a hub event."""
+        for ref in (event.get("device"), event.get("subject")):
+            if isinstance(ref, dict) and isinstance(ref.get("id"), str) and ref["id"] != hub_id:
+                return ref["id"]
+        return None
 
     def _targets(self, hub_id: str, event: dict[str, Any]) -> set[str]:
-        detectors = self._detectors(hub_id)
-        for ref in (event.get("device"), event.get("subject")):
-            if isinstance(ref, dict) and ref.get("id") in detectors:
-                return {ref["id"]}
-        return set()
+        reference = self._device_reference(hub_id, event)
+        return {reference} if reference in self._detectors(hub_id) else set()
 
     @staticmethod
     def _event_time(event: dict[str, Any]) -> datetime | None:
@@ -145,14 +150,13 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         hub_id = hub["id"]
         async with self._state_lock:
             targets = self._targets(hub_id, payload)
-            if code in (1110, 1111) and not targets:
-                targets = self._detectors(hub_id)
-            if code in (9421, 9422):
+            if code in (1110, 1111, 9421, 9422) and self._device_reference(hub_id, payload) is None:
                 targets = self._detectors(hub_id)
             if code in (1384, 3384, 1381, 3381, 1380, 1389, 1659, 1110, 1111, 9421, 9422):
                 for device_id in targets:
                     flags = self.flags.setdefault(device_id, {})
                     if code in (1110, 1111):
+                        # Keep the existing internal alarm key for both fire models.
                         flags["smoke"] = True
                         self._cleared_alarms.pop(device_id, None)
                         self._cleared_device_states.pop(device_id, None)
@@ -163,7 +167,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                         identities.update(
                             self._event_identity(alarm)
                             for alarm in self.alarm_events.get(hub_id, [])
-                            if not self._targets(hub_id, alarm) or self._targets(hub_id, alarm) == {device_id}
+                            if self._device_reference(hub_id, alarm) in (None, device_id)
                         )
                         self._cleared_alarms[device_id] = (self._event_time(payload), identities)
                         device = next((d for d in self.data[hub_id]["hub"].get("devices", [])
@@ -180,7 +184,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
     def alarm_state(self, hub_id: str, device_id: str) -> bool | None:
         item = (self.data or {}).get(hub_id)
-        if not item:
+        if not item or device_id not in self._detectors(hub_id):
             return None
         device = next((d for d in item["hub"].get("devices", []) if isinstance(d, dict) and d.get("id") == device_id), None)
         if device is None:
@@ -197,7 +201,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 continue
             if self._targets(hub_id, event) == {device_id}:
                 return True
-            if not self._targets(hub_id, event):
+            if self._device_reference(hub_id, event) is None:
                 return True
         if device_id in self.flags and "smoke" in self.flags[device_id]:
             return False

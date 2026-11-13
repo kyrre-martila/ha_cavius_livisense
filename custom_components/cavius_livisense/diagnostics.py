@@ -7,6 +7,8 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .const import SUPPORTED_MODELS
+
 _REDACTED = "**REDACTED**"
 # Conservative schema identifiers only. Numbers are excluded because serials,
 # UUIDs and opaque tokens cannot reliably be distinguished from model codes.
@@ -34,7 +36,7 @@ def _device_diagnostics(raw: Any) -> dict[str, Any]:
     result = {
         "model": model,
         "type": device_type,
-        "supported_model": device.get("model") == "SMOKECAVIUS",
+        "supported_model": device.get("model") in SUPPORTED_MODELS,
         "state_fields": sorted({
             safe for key in state
             if (safe := _identifier(key)) not in (None, _REDACTED)
