@@ -26,16 +26,16 @@ The integration discovers all hub IDs returned by the account profile and suppor
 - **Last WebSocket message:** UTC time of the last valid incoming application message. Unknown until one arrives. A connected socket can have no recent application activity.
 - **Last cloud update:** the documented `state.updatedAt` timestamp for each hub, detector and Smart Remote, when present. Detector and remote timestamps become unavailable when their parent hub is offline or cloud synchronization fails.
 
-Smoke and heat detectors also have:
+Hub diagnostics also include **Fire drill state** (planned, active, ended or cancelled, from live WebSocket events) and **Last fire drill** (cloud timestamp; may refer to when the drill was planned rather than when it started). Fire drill state is unknown until a live event arrives and is not restored after a restart. Drill events never set smoke or heat alarms.\n\nSmoke and heat detectors also have:
 
 - **Smoke alarm** (smoke detectors) or **Heat alarm** (heat detectors): active for a non-null detector alarm state, a current unacknowledged alarm event, or a fire WebSocket event. Hub-level events with no device ID flag all smoke and heat detectors on that hub. A device-specific event affects only that detector. Documented clear events clear the WebSocket flag; an absent REST event does not clear a WebSocket fire alarm. Unknown is shown until enough cloud data establishes a clear state.
-- **Battery low:** event based warning, cleared by the documented recovery event. Battery percentage is unavailable.
+- **Last tested** and **Last test result:** cloud-reported diagnostic fields, when provided.\n- **Battery low:** event based warning, cleared by the documented recovery event. Battery percentage is unavailable.
 - **Signal loss:** event based diagnostic, cleared by the documented recovery event.
 - **Sensor trouble:** diagnostic set by trouble or self-test failure events. The API documents no recovery event, so this state persists until integration reload.
 
 Smart Remotes expose only **Last cloud update**, when available. Cloud button press delivery and the meaning of remote battery/signal values are not confirmed, so no buttons, alarm or battery/signal entities are created.
 
-Alarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Event flags persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across Home Assistant restarts.
+Acknowledgement (9411) is not an alarm clear. Known drill, acknowledgement and classification events are excluded from REST unacknowledged-alarm recovery, preventing drills from being restored as smoke alarms. Unknown event codes remain conservatively eligible for alarm recovery. Reloading while an actual alarm remains active can still cause an unavailable-to-on transition and trigger Home Assistant automations; account for this in safety-related automation design.\n\nAlarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Event flags persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across Home Assistant restarts.
 
 The integration listens for documented WebSocket state changes and polls the REST API every five minutes as a fallback. It reconnects after network failures and refreshes the REST snapshot after reconnecting. This is intended for diagnostics and is **not suitable for fire safety monitoring**.
 
@@ -49,7 +49,7 @@ The integration listens for documented WebSocket state changes and polls the RES
 
 > **Safety:** This integration is not a certified fire safety system. Never use it as a replacement for the detectors' built-in alarms or official Cavius safety functionality. Physical detectors must remain operational independently of Home Assistant.
 
-## Credits
+## Licence\n\nLicensed under the MIT License. See [LICENSE](LICENSE).\n\n## Credits
 
 Special thanks to **André Rovik**, developer of the unofficial [Cavius Alarms app for Homey](https://homey.app/en-no/app/com.arovik.cavius/Cavius-Alarms-(unofficial)/test/), for sharing his reverse-engineering findings and technical documentation of the Cavius LiviSense cloud API. His research provided the foundation for this integration.
 
