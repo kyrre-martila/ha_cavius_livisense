@@ -247,3 +247,34 @@ Reference implementation (Node, no framework deps): `lib/LiviClient.js`,
 - Arm/disarm and "test sensors" endpoints.
 - IFTTT ("Works With Cavius LiviSense") and Google Home are linked services on the same
   backend, so the cloud is the intended integration point.
+
+
+## Issue #5 evidence and integration policy
+
+The [issue #5 report](https://github.com/kyrre-martila/ha_cavius_livisense/issues/5)
+captured drill WebSocket codes 9811, 1119, 9812 and acknowledgement 9411. It did
+not capture the REST list while the drill was unacknowledged or a non-null
+`state.alarm`. The real-fire REST record and WebSocket shapes remain unverified.
+Nested `event.code` (WebSocket) and direct `code` (activity) are supported by the
+integration; REST tests of these shapes are synthetic, not captured fire fixtures.
+
+Unlike the historical suggested client design above, REST recovery establishes
+fire only from label-confirmed 1110/1111. Documented drill, classification,
+acknowledgement, test, fault and non-fire alarm codes cannot establish fire.
+Unknown/missing codes produce an unknown alarm state for the relevant detectors
+unless independent fire evidence exists. The original records remain cached.
+Acknowledgement/classification never clears a recovered fire; disappearance from
+the unacknowledged endpoint also cannot clear it. Existing clear/hush events
+1659/9421/9422 retain their existing handling.
+
+A detector alarm object explicitly carrying a drill code, directly or in
+`event.code`, is treated as confirmed drill state. This is a defensive rule, not
+a claim that this non-null shape has been captured. Opaque values, including
+free text mentioning a drill, retain the active-alarm fallback. A simultaneous
+hub drill does not prove a detector alarm is a drill and never suppresses fire.
+
+Recovery caches are in memory. After reload/restart, a fire already acknowledged
+and absent from both REST events and detector state cannot be recovered. A clear
+missed while offline can leave a recovered fire active until reload or another
+clear; a real new fire always overrides a prior clear. These are cloud-data
+limitations, not verified physical-fire behavior.

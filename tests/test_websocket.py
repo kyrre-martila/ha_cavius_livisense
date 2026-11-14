@@ -78,17 +78,18 @@ async def test_reception_and_reconnect():
 
     client.session.ws_connect.side_effect = lambda *args, **kwargs: Connection()
     listener = LiviSenseWebSocket(client, coordinator)
-    original_sleep = __import__("asyncio").sleep
+    original_sleep = asyncio.sleep
+    waiting_to_reconnect = asyncio.Event()
 
-    async def short_sleep(_delay):
+    async def short_sleep(delay):
+        if delay == 5 and len(sockets) >= 2:
+            waiting_to_reconnect.set()
+            await asyncio.Event().wait()
         await original_sleep(0)
 
     with patch("custom_components.cavius_livisense.websocket.asyncio.sleep", side_effect=short_sleep):
         listener.start()
-        for _ in range(100):
-            if len(sockets) >= 2:
-                break
-            await original_sleep(0)
+        await asyncio.wait_for(waiting_to_reconnect.wait(), 1)
         await listener.stop()
     assert len(sockets) >= 2
     assert coordinator.async_apply_message.await_count >= 2
@@ -116,6 +117,7 @@ async def test_refresh_and_merge_are_serialized(hass, refresh_path):
     entered = asyncio.Event()
     release = asyncio.Event()
 
+    client.unacknowledged_alarms = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
 
     async def hub_snapshot(_hub_id):
@@ -141,6 +143,7 @@ async def test_refresh_and_merge_are_serialized(hass, refresh_path):
 @pytest.mark.asyncio
 async def test_websocket_first_then_rest_and_refresh_request(hass):
     client = MagicMock()
+    client.unacknowledged_alarms = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     client.hub = AsyncMock(return_value={"data": {"id": "hub", "state": {"status": "offline"}, "devices": []}})
     coordinator = LiviSenseCoordinator(hass, client)
@@ -199,3 +202,51 @@ def test_documented_message_shapes():
     assert not _valid_application_message({"name": "ping", "data": {}})
     assert not _valid_application_message({"name": "pong", "data": {}})
     assert _valid_application_message({"name": "unknown:event", "data": {}})
+
+
+async def test_reload_stop_during_keepalive_cleanup():
+    """Cancelling the listener during child cleanup must not reconnect."""
+    client = MagicMock()
+    client.access_token = AsyncMock(return_value="token")
+    coordinator = MagicMock()
+    coordinator.async_request_refresh = AsyncMock()
+    cleanup_entered = asyncio.Event()
+
+    class Socket:
+        closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            # Ensure the keepalive task starts before its cancellation.
+            await asyncio.sleep(0)
+            raise StopAsyncIteration
+
+    connection = MagicMock()
+    connection.__aenter__ = AsyncMock(return_value=Socket())
+    connection.__aexit__ = AsyncMock(return_value=False)
+    client.session.ws_connect.return_value = connection
+    listener = LiviSenseWebSocket(client, coordinator)
+
+    async def keepalive(_ws):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_entered.set()
+            await asyncio.Event().wait()
+
+    listener._keepalive = keepalive
+    listener.start()
+    await asyncio.wait_for(cleanup_entered.wait(), 1)
+    stop = asyncio.create_task(listener.stop())
+    try:
+        done, _ = await asyncio.wait({stop}, timeout=0.2)
+        assert stop in done, "Reload cancellation was swallowed during keepalive cleanup"
+        await stop
+        assert listener._task is None
+        client.access_token.assert_awaited_once()
+    finally:
+        if not stop.done():
+            stop.cancel()
+            await stop

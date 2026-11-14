@@ -112,7 +112,8 @@ class _Diagnostic(CoordinatorEntity, SensorEntity):
         if not item:
             return False
         state = item["hub"].get("state")
-        return isinstance(state, dict) and state.get("status") == "online"
+        return (isinstance(state, dict) and state.get("status") == "online"
+                and bool(self._object()))
 
     def _object(self):
         item = (self.coordinator.data or {}).get(self.hub_id)
@@ -131,7 +132,10 @@ def _iso_datetime(value):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+    try:
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+    except (ValueError, OverflowError):
+        return None
 
 
 class HubDrillState(_Diagnostic):
