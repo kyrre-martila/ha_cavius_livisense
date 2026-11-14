@@ -166,14 +166,14 @@ async def test_global_clear_with_delayed_rest_and_new_alarm(coordinator, code):
 async def test_identity_fallback_and_failure_preserve_alarm(coordinator):
     from custom_components.cavius_livisense.api import ApiError
 
-    old = {"id": "old", "subject": {"id": "a"}}
+    old = {"id": "old", "code": 1110, "subject": {"id": "a"}}
     coordinator.client.unacknowledged_alarms.return_value = [old]
     await coordinator.async_refresh()
     await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
     coordinator.request_alarm_reconciliation()
     await coordinator.async_refresh()
     assert coordinator.alarm_state("hub", "a") is False
-    coordinator.client.unacknowledged_alarms.return_value = [old, {"id": "new", "subject": {"id": "a"}}]
+    coordinator.client.unacknowledged_alarms.return_value = [old, {"id": "new", "code": 1110, "subject": {"id": "a"}}]
     coordinator.request_alarm_reconciliation()
     await coordinator.async_refresh()
     assert coordinator.alarm_state("hub", "a") is True

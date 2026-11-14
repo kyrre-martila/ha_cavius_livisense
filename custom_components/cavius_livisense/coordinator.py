@@ -31,6 +31,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self.events: list[dict[str, Any]] = []
         self.flags: dict[str, dict[str, bool]] = {}
         self.alarm_events: dict[str, list[dict[str, Any]]] = {}
+        self.drill_states: dict[str, str] = {}
         self._cleared_alarms: dict[str, tuple[datetime | None, set[str]]] = {}
         self._cleared_device_states: dict[str, Any] = {}
         self._last_alarm_fetch: datetime | None = None
@@ -118,7 +119,10 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             result = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-        return result.astimezone(timezone.utc) if result.tzinfo else None
+        try:
+            return result.astimezone(timezone.utc) if result.tzinfo else None
+        except (ValueError, OverflowError):
+            return None
 
     @staticmethod
     def _event_identity(event: dict[str, Any]) -> str:
@@ -143,12 +147,17 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         event = payload.get("event")
         if not isinstance(hub, dict) or hub.get("id") not in (self.data or {}) or not isinstance(event, dict):
             return
-        try:
-            code = int(event.get("code"))
-        except (TypeError, ValueError):
+        code = self._event_code(payload)
+        if code is None:
             return
         hub_id = hub["id"]
         async with self._state_lock:
+            # Drill lifecycle is diagnostic only; it must never set a fire flag.
+            drill = {9811: "planned", 1119: "active", 3119: "ended", 9812: "cancelled"}
+            if code in drill:
+                self.drill_states[hub_id] = drill[code]
+                self.async_update_listeners()
+                return
             targets = self._targets(hub_id, payload)
             if code in (1110, 1111, 9421, 9422) and self._device_reference(hub_id, payload) is None:
                 targets = self._detectors(hub_id)
@@ -182,6 +191,27 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                         flags["trouble"] = True
                 self.async_update_listeners()
 
+    @classmethod
+    def _is_alarm_record(cls, event: dict[str, Any]) -> bool:
+        """Only label-confirmed fire codes establish fire from event records."""
+        return cls._event_code(event) in {1110, 1111}
+
+    @classmethod
+    def _is_non_fire_record(cls, event: dict[str, Any]) -> bool:
+        """Documented lifecycle, fault, test and non-fire alarm records."""
+        return cls._event_code(event) in {
+            1119, 3119, 9811, 9812, 9411, 9412, 9413, 9421, 9422, 1659,
+            1384, 3384, 1381, 3381, 1380, 1389, 1302, 3302, 1301, 3301,
+            1344, 1137, 3137, 1130, 3130, 1400, 3408, 1602, 1604, 9995, 9996,
+        }
+
+    @classmethod
+    def _confirmed_drill_state(cls, value: Any) -> bool:
+        # Non-null state.alarm has never been captured. Only an explicit
+        # documented drill code is sufficient evidence; do not infer a drill
+        # from a concurrent hub drill, free text, or an unrelated REST record.
+        return isinstance(value, dict) and cls._event_code(value) in {1119, 3119, 9811, 9812}
+
     def alarm_state(self, hub_id: str, device_id: str) -> bool | None:
         item = (self.data or {}).get(hub_id)
         if not item or device_id not in self._detectors(hub_id):
@@ -193,16 +223,23 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         flag = self.flags.get(device_id, {}).get("smoke")
         if flag is True:
             return True
-        if isinstance(state, dict) and state.get("alarm") is not None:
+        if (isinstance(state, dict) and state.get("alarm") is not None
+                and not self._confirmed_drill_state(state["alarm"])):
             if flag is not False or state["alarm"] != self._cleared_device_states.get(device_id):
                 return True
+        ambiguous = False
         for event in self.alarm_events.get(hub_id, []):
+            if not isinstance(event, dict) or self._is_non_fire_record(event):
+                continue
             if flag is False and self._event_cleared(device_id, event):
                 continue
-            if self._targets(hub_id, event) == {device_id}:
-                return True
-            if self._device_reference(hub_id, event) is None:
-                return True
+            if (self._targets(hub_id, event) == {device_id}
+                    or self._device_reference(hub_id, event) is None):
+                if self._is_alarm_record(event):
+                    return True
+                ambiguous = True
+        if ambiguous:
+            return None
         if device_id in self.flags and "smoke" in self.flags[device_id]:
             return False
         if isinstance(state, dict) and "alarm" in state and hub_id in self.alarm_events:
@@ -212,9 +249,12 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     @staticmethod
     def _event_code(event: dict[str, Any]) -> int | None:
         raw = event.get("event", event)
+        value = raw.get("code") if isinstance(raw, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return None
         try:
-            return int(raw.get("code")) if isinstance(raw, dict) else None
-        except (TypeError, ValueError):
+            return int(value)
+        except ValueError:
             return None
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
@@ -230,7 +270,21 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     raise ConfigEntryAuthFailed from exc
                 except ApiError as exc:
                     raise UpdateFailed(str(exc)) from exc
-                self.alarm_events = alarms
+                recovered = {}
+                for hub_id, events in alarms.items():
+                    if not isinstance(events, list):
+                        continue
+                    records = [event for event in events if isinstance(event, dict)]
+                    identities = {self._event_identity(event) for event in records}
+                    # Acknowledgement removes records from this endpoint. It is
+                    # not a clear: retain recovered fires until an actual clear.
+                    records.extend(
+                        event for event in self.alarm_events.get(hub_id, [])
+                        if self._is_alarm_record(event)
+                        and self._event_identity(event) not in identities
+                    )
+                    recovered[hub_id] = records
+                self.alarm_events = recovered
                 self._last_alarm_fetch = now
             return snapshot
 

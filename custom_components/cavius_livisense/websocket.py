@@ -114,7 +114,10 @@ class LiviSenseWebSocket:
                         try:
                             await keepalive
                         except asyncio.CancelledError:
-                            pass
+                            # Reload may cancel the listener while it awaits
+                            # keepalive cleanup. Preserve that cancellation.
+                            if asyncio.current_task().cancelling():
+                                raise
             except asyncio.CancelledError:
                 raise
             except aiohttp.WSServerHandshakeError as exc:

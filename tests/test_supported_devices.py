@@ -46,6 +46,8 @@ async def test_entities_and_diagnostics(coordinator):
                 for key in (("smoke" if i < 5 else "heat"), "battery", "signal", "trouble", "last_cloud_update")}
     expected |= {"device-7_last_cloud_update", "hub_connectivity", "hub_websocket_connectivity",
                  "hub_last_cloud_update", "hub_last_websocket_message"}
+    expected |= {"hub_fire_drill_state", "hub_last_fire_drill"}
+    expected |= {f"device-{i}_{key}" for i in range(7) for key in ("last_tested", "last_test_result")}
     assert set(by_id) == expected
     assert by_id["device-5_heat"].device_class == BinarySensorDeviceClass.HEAT
     assert by_id["device-0_smoke"].device_class == BinarySensorDeviceClass.SMOKE
@@ -140,7 +142,8 @@ def verify_cleanup():
     yield
 
 
-async def test_real_ha_registry_reload_and_stable_ids(hass):
+@pytest.mark.parametrize(("code", "alarm_state"), [(1119, "off"), (1110, "on"), (9999, "unknown")])
+async def test_real_ha_registry_reload_and_stable_ids(hass, code, alarm_state):
     entry = MockConfigEntry(domain=DOMAIN, data={"email": "test@example.com", "password": "secret"})
     entry.add_to_hass(hass)
     # Simulate the smoke entities already registered by an older integration.
@@ -149,7 +152,7 @@ async def test_real_ha_registry_reload_and_stable_ids(hass):
     with (
         patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["hub"]}),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub_data()),
-        patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[]),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[event(code)]),
         patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -162,12 +165,17 @@ async def test_real_ha_registry_reload_and_stable_ids(hass):
             assert device.via_device_id == hub.id
         before = {e.unique_id: e.entity_id for e in er.async_entries_for_config_entry(entities, entry.entry_id)}
         assert before["device-0_smoke"] == old.entity_id
-        assert hass.states.get(old.entity_id) is not None
-        assert len(before) == 40
+        assert hass.states.get(old.entity_id).state == alarm_state
+        assert hass.states.get(before["device-5_heat"]).state == alarm_state
+        assert hass.states.get(before["device-0_last_tested"]).state == "unknown"
+        assert hass.states.get(before["hub_fire_drill_state"]).state == "unknown"
+        assert len(before) == 56
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
         assert {e.unique_id: e.entity_id for e in er.async_entries_for_config_entry(entities, entry.entry_id)} == before
         assert len(registry.devices) == 9
+        assert hass.states.get(old.entity_id).state == alarm_state
+        assert hass.states.get(before["device-5_heat"]).state == alarm_state
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 

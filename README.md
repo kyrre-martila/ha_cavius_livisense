@@ -26,21 +26,27 @@ The integration discovers all hub IDs returned by the account profile and suppor
 - **Last WebSocket message:** UTC time of the last valid incoming application message. Unknown until one arrives. A connected socket can have no recent application activity.
 - **Last cloud update:** the documented `state.updatedAt` timestamp for each hub, detector and Smart Remote, when present. Detector and remote timestamps become unavailable when their parent hub is offline or cloud synchronization fails.
 
+Hub diagnostics also include **Fire drill state** (planned, active, ended or cancelled, from live WebSocket events) and **Last fire drill** (cloud timestamp; may refer to when the drill was planned rather than when it started). Fire drill state is unknown until a live event arrives and is not restored after a restart. Drill lifecycle events never set smoke or heat flags; a concurrent drill never suppresses independent fire evidence.
+
 Smoke and heat detectors also have:
 
-- **Smoke alarm** (smoke detectors) or **Heat alarm** (heat detectors): active for a non-null detector alarm state, a current unacknowledged alarm event, or a fire WebSocket event. Hub-level events with no device ID flag all smoke and heat detectors on that hub. A device-specific event affects only that detector. Documented clear events clear the WebSocket flag; an absent REST event does not clear a WebSocket fire alarm. Unknown is shown until enough cloud data establishes a clear state.
+- **Smoke alarm** (smoke detectors) or **Heat alarm** (heat detectors): active for a non-null detector alarm state (except an object carrying an explicit documented drill code), a documented fire REST event (1110/1111), or a fire WebSocket event. Hub-level events with no device ID flag all smoke and heat detectors on that hub. A device-specific event affects only that detector. Documented clear events clear the WebSocket flag; an absent REST event does not clear a WebSocket fire alarm. Unknown is shown until enough cloud data establishes a clear state.
+- **Last tested** and **Last test result:** cloud-reported diagnostic fields, when provided.
 - **Battery low:** event based warning, cleared by the documented recovery event. Battery percentage is unavailable.
 - **Signal loss:** event based diagnostic, cleared by the documented recovery event.
 - **Sensor trouble:** diagnostic set by trouble or self-test failure events. The API documents no recovery event, so this state persists until integration reload.
 
 Smart Remotes expose only **Last cloud update**, when available. Cloud button press delivery and the meaning of remote battery/signal values are not confirmed, so no buttons, alarm or battery/signal entities are created.
 
-Alarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Event flags persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across Home Assistant restarts.
+Acknowledgement (9411) is not an alarm clear. Drill, acknowledgement, classification and other documented non-fire event codes do not establish fire during REST recovery. Unknown or missing REST event codes produce an unknown alarm state for their targets unless independent fire evidence is present. Recovered REST fire events remain active after acknowledgement removes them from the endpoint, until an actual clear event is received. Codes 9412/9413 classify an alarm and do not clear it. Existing hush/clear handling uses 1659/9421/9422. Reloading while an actual alarm remains active can still cause an unavailable-to-on transition and trigger Home Assistant automations; account for this in safety-related automation design.
+
+Alarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Event flags and recovered fire records persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across reloads or Home Assistant restarts. An acknowledged fire absent from both REST events and detector state cannot be recovered after reload. A missed clear can leave a recovered fire active until another clear or reload.
 
 The integration listens for documented WebSocket state changes and polls the REST API every five minutes as a fallback. It reconnects after network failures and refreshes the REST snapshot after reconnecting. This is intended for diagnostics and is **not suitable for fire safety monitoring**.
 
 ## Known limitations
 
+- Non-null `state.alarm` values and real-fire REST event shapes have not been captured. Only an object with a documented drill code (1119/3119/9811/9812, directly or under `event`) is treated as confirmed drill state. Other non-null values retain the active-alarm fallback, even during a drill; this ambiguity can cause false alarms. Unclassified REST records appear as unknown rather than being guessed to be fire.
 - Real heat alarms have not been verified. Heat detectors reuse the documented fire alarm and clear events; no heat-specific event codes are assumed. Fire event payload shape is not verified against a real fire. Hub-level events without a detector ID are attributed to every detector on that hub. The integration is read-only.
 - Battery percentage is not confirmed for smoke or heat detectors.
 - The cloud API is unofficial and may change without notice.
@@ -48,6 +54,10 @@ The integration listens for documented WebSocket state changes and polls the RES
 - Detector connectivity is not separately verified by the documented REST data. A detector's last update is historical data, not proof of present communication.
 
 > **Safety:** This integration is not a certified fire safety system. Never use it as a replacement for the detectors' built-in alarms or official Cavius safety functionality. Physical detectors must remain operational independently of Home Assistant.
+
+## Licence
+
+Licensed under the MIT License. See [LICENSE](LICENSE).
 
 ## Credits
 

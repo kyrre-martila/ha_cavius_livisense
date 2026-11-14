@@ -96,7 +96,7 @@ async def test_smoke_discovery_filters_unchanged(hass):
     entities = []
     await binary_sensor.async_setup_entry(hass, entry, entities.extend)
     await sensor.async_setup_entry(hass, entry, entities.extend)
-    assert len(entities) == 9
+    assert len(entities) == 13
     assert {entity.device_id for entity in entities if hasattr(entity, "device_id")} == {None, "smoke"}
     assert coordinator._detectors("hub") == {"smoke"}
     for call in entry.async_on_unload.call_args_list:
