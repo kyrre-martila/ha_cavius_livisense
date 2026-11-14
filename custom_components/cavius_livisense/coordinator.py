@@ -31,6 +31,7 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self.events: list[dict[str, Any]] = []
         self.flags: dict[str, dict[str, bool]] = {}
         self.alarm_events: dict[str, list[dict[str, Any]]] = {}
+        self.drill_states: dict[str, str] = {}
         self._cleared_alarms: dict[str, tuple[datetime | None, set[str]]] = {}
         self._cleared_device_states: dict[str, Any] = {}
         self._last_alarm_fetch: datetime | None = None
@@ -149,6 +150,12 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             return
         hub_id = hub["id"]
         async with self._state_lock:
+            # Drill lifecycle is diagnostic only; it must never set a fire flag.
+            drill = {9811: "planned", 1119: "active", 3119: "ended", 9812: "cancelled"}
+            if code in drill:
+                self.drill_states[hub_id] = drill[code]
+                self.async_update_listeners()
+                return
             targets = self._targets(hub_id, payload)
             if code in (1110, 1111, 9421, 9422) and self._device_reference(hub_id, payload) is None:
                 targets = self._detectors(hub_id)
@@ -182,6 +189,17 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                         flags["trouble"] = True
                 self.async_update_listeners()
 
+    @classmethod
+    def _is_alarm_record(cls, event: dict[str, Any]) -> bool:
+        """Exclude known drill and lifecycle records from REST alarm recovery.
+
+        Unknown event codes remain eligible so new real alarm codes do not
+        silently disappear. Only documented fire events are set by WebSocket.
+        """
+        return cls._event_code(event) not in {
+            1119, 3119, 9811, 9812, 9411, 9412, 9413, 9421, 9422,
+        }
+
     def alarm_state(self, hub_id: str, device_id: str) -> bool | None:
         item = (self.data or {}).get(hub_id)
         if not item or device_id not in self._detectors(hub_id):
@@ -197,6 +215,8 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             if flag is not False or state["alarm"] != self._cleared_device_states.get(device_id):
                 return True
         for event in self.alarm_events.get(hub_id, []):
+            if not isinstance(event, dict) or not self._is_alarm_record(event):
+                continue
             if flag is False and self._event_cleared(device_id, event):
                 continue
             if self._targets(hub_id, event) == {device_id}:
@@ -230,7 +250,11 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     raise ConfigEntryAuthFailed from exc
                 except ApiError as exc:
                     raise UpdateFailed(str(exc)) from exc
-                self.alarm_events = alarms
+                self.alarm_events = {
+                    hub_id: [event for event in events if isinstance(event, dict) and self._is_alarm_record(event)]
+                    for hub_id, events in alarms.items()
+                    if isinstance(events, list)
+                }
                 self._last_alarm_fetch = now
             return snapshot
 
