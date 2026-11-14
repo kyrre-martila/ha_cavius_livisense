@@ -131,3 +131,65 @@ async def test_malformed_login_response():
     client = api.LiviSenseClient(Session([(200, {"token": {}, "user": {}})]), "a", "b")
     with pytest.raises(api.ApiError):
         await client.login()
+
+
+
+def activity_response(data, total=None, **meta):
+    return {"data": data, "meta": {"from": 100, "until": 200, "sort": "desc",
+                                  **({"total": total} if total is not None else {}), **meta}}
+
+
+@pytest.mark.parametrize("response,complete", [
+    (activity_response([], 0), True),
+    (activity_response([{"code": 1384}], 1), True),
+    (activity_response([{"code": 1384}]), False),
+    (activity_response([{"code": 1384}], 2), False),
+    (activity_response([], 0, sort="asc"), False),
+    (activity_response([], 0, until=199), False),
+    (activity_response([], True), False),
+    (activity_response([], 901), False),
+    (activity_response([], 1, currentPage=1, lastPage=2), False),
+    (activity_response([None], 1), False),
+    (activity_response([{}], 1, currentPage=1, lastPage=2), False),
+])
+async def test_activity_requires_explicit_coverage(response, complete):
+    session = Session([(200, login_response()), (200, response)])
+    client = api.LiviSenseClient(session, "a", "b")
+    events, actual = await client.activity("hub/id", 100, 200)
+    assert actual is complete
+    assert session.calls[-1][1].endswith("/api/hubs/hub%2Fid/activity")
+    assert session.calls[-1][2]["params"] == {"from": 100, "until": 200, "perPage": 300, "page": 1}
+    if not complete:
+        assert events == []
+
+
+async def test_activity_bounded_pagination_and_total_consistency():
+    first = activity_response([{"code": 3384}], 2, currentPage=1, lastPage=2)
+    last = activity_response([{"code": 1384}], 2, currentPage=2, lastPage=2)
+    session = Session([(200, login_response()), (200, first), (200, last)])
+    client = api.LiviSenseClient(session, "a", "b")
+    events, complete = await client.activity("hub", 100, 200)
+    assert complete and [event["code"] for event in events] == [3384, 1384]
+    assert session.calls[-1][2]["params"]["page"] == 2
+    last["meta"]["total"] = 3
+    session = Session([(200, login_response()), (200, first), (200, last)])
+    assert await api.LiviSenseClient(session, "a", "b").activity("hub", 100, 200) == ([], False)
+
+
+async def test_activity_page_limit_and_rate_limit_stop():
+    response = activity_response([{}], 5, currentPage=1, lastPage=5)
+    session = Session([(200, login_response()), (200, response)])
+    assert await api.LiviSenseClient(session, "a", "b").activity("hub", 100, 200) == ([], False)
+    assert len(session.calls) == 2
+    session = Session([(200, login_response()), (429, {})])
+    with pytest.raises(api.ConnectionError):
+        await api.LiviSenseClient(session, "a", "b").activity("hub", 100, 200)
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize("start,end", [(0, 604801), (100, 100), (200, 100)])
+async def test_activity_rejects_oversized_or_invalid_window(start, end):
+    session = Session([])
+    with pytest.raises(ValueError):
+        await api.LiviSenseClient(session, "a", "b").activity("hub", start, end)
+    assert not session.calls

@@ -1,5 +1,7 @@
 """Mocked detector alarm and fault state tests."""
 from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime
+
 
 import pytest
 
@@ -10,6 +12,7 @@ from custom_components.cavius_livisense.binary_sensor import DetectorFlag
 @pytest.fixture
 def coordinator(hass):
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     client.hub = AsyncMock(return_value={"data": {
         "id": "hub", "state": {"status": "online"},
@@ -23,7 +26,7 @@ def coordinator(hass):
 
 
 def event(code, subject=None):
-    return {"hub": {"id": "hub"}, "event": {"code": code}, "subject": subject or {"id": "hub", "type": "hub"}}
+    return {"hub": {"id": "hub"}, "event": {"code": code}, "subject": subject or {"id": "hub", "type": "hub"}, "happenedAt": datetime.now(UTC).isoformat()}
 
 
 @pytest.mark.asyncio
@@ -59,13 +62,13 @@ async def test_fire_grace_and_fault_recovery(coordinator):
                              (1381, "signal", True), (3381, "signal", False),
                              (1380, "trouble", True), (1389, "trouble", True)):
         await coordinator.async_apply_message("hub:event", event(code, {"id": "a"}))
-        assert coordinator.flags["a"][key] is value
+        assert coordinator.faults.value("hub", "a", key) is value
     coordinator.request_alarm_reconciliation()
     await coordinator.async_refresh()
     assert coordinator.alarm_state("hub", "a") is True
     await coordinator.async_apply_message("hub:event", event(1659, {"id": "a"}))
     assert coordinator.alarm_state("hub", "a") is False
-    assert coordinator.flags["a"]["trouble"] is True
+    assert coordinator.faults.value("hub", "a", "trouble") is True
 
 
 @pytest.mark.asyncio
@@ -229,3 +232,4 @@ async def test_new_fire_event_after_clear_with_unchanged_device_state(coordinato
     assert sensor.is_on is False
     await coordinator.async_apply_message("hub:event", event(1110, {"id": "a"}))
     assert sensor.is_on is True
+

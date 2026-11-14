@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import ApiError, AuthError, LiviSenseClient
 from .const import DOMAIN, UPDATE_INTERVAL, FIRE_DETECTOR_MODELS
+from .faults import FAULT_CODES, FaultEvidence
 
 
 def _unwrap(response: dict[str, Any]) -> dict[str, Any]:
@@ -30,6 +31,8 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._state_lock = asyncio.Lock()
         self.events: list[dict[str, Any]] = []
         self.flags: dict[str, dict[str, bool]] = {}
+        self.faults = FaultEvidence()
+        self._fault_stream_started = datetime.now(UTC)
         self.alarm_events: dict[str, list[dict[str, Any]]] = {}
         self.drill_states: dict[str, str] = {}
         self._cleared_alarms: dict[str, tuple[datetime | None, set[str]]] = {}
@@ -41,6 +44,10 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     def set_websocket_connected(self, connected: bool) -> None:
         if self.websocket_connected != connected:
             self.websocket_connected = connected
+            if connected:
+                self._fault_stream_started = datetime.now(UTC)
+            else:
+                self.faults.mark_gap(self.data or {})
             self.async_update_listeners()
 
     def record_websocket_message(self) -> None:
@@ -89,6 +96,8 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 if not isinstance(state, dict):
                     state = target["state"] = {}
                 state.update(changes)
+                if name == "hub:state" and "status" in changes and changes["status"] != "online":
+                    self.faults.mark_gap({hub_ref["id"]})
                 # Keep the scheduled REST fallback timer intact.
                 self.async_update_listeners()
         if refresh:
@@ -158,10 +167,19 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 self.drill_states[hub_id] = drill[code]
                 self.async_update_listeners()
                 return
+            if code in FAULT_CODES:
+                timestamp = self._event_time(payload)
+                if timestamp is not None and timestamp < self._fault_stream_started:
+                    return  # A replay before this stream cannot establish current state.
+                if timestamp is not None and timestamp > datetime.now(UTC):
+                    timestamp = None
+                self.faults.apply(hub_id, self._detectors(hub_id), payload, code, timestamp, live=True)
+                self.async_update_listeners()
+                return
             targets = self._targets(hub_id, payload)
             if code in (1110, 1111, 9421, 9422) and self._device_reference(hub_id, payload) is None:
                 targets = self._detectors(hub_id)
-            if code in (1384, 3384, 1381, 3381, 1380, 1389, 1659, 1110, 1111, 9421, 9422):
+            if code in (1659, 1110, 1111, 9421, 9422):
                 for device_id in targets:
                     flags = self.flags.setdefault(device_id, {})
                     if code in (1110, 1111):
@@ -183,12 +201,6 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                                        if isinstance(d, dict) and d.get("id") == device_id), {})
                         state = device.get("state")
                         self._cleared_device_states[device_id] = state.get("alarm") if isinstance(state, dict) else None
-                    elif code in (1384, 3384):
-                        flags["battery"] = code == 1384
-                    elif code in (1381, 3381):
-                        flags["signal"] = code == 1381
-                    elif code in (1380, 1389):
-                        flags["trouble"] = True
                 self.async_update_listeners()
 
     @classmethod
@@ -286,7 +298,50 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     recovered[hub_id] = records
                 self.alarm_events = recovered
                 self._last_alarm_fetch = now
+            for hub_id, item in snapshot.items():
+                state = item["hub"].get("state")
+                if not isinstance(state, dict) or state.get("status") != "online":
+                    self.faults.mark_gap({hub_id})
+            await self._recover_faults(snapshot, now)
             return snapshot
+
+    async def _recover_faults(self, snapshot, now) -> None:
+        # Reconnects share this budget with scheduled polls, preventing storms.
+        if (self.faults.last_attempt is not None
+                and now - self.faults.last_attempt < UPDATE_INTERVAL):
+            return
+        self.faults.last_attempt = now
+        end_seconds = int(now.timestamp())
+        start_seconds = end_seconds - 7 * 86400
+        start = datetime.fromtimestamp(start_seconds, UTC)
+        end = datetime.fromtimestamp(end_seconds, UTC)
+        for hub_id, item in snapshot.items():
+            state = item["hub"].get("state")
+            if not isinstance(state, dict) or state.get("status") != "online":
+                self.faults.mark_gap({hub_id})
+                continue
+            detectors = {d["id"] for d in item["hub"]["devices"]
+                         if isinstance(d, dict) and d.get("model") in FIRE_DETECTOR_MODELS
+                         and isinstance(d.get("id"), str)}
+            try:
+                events, complete = await self.client.activity(hub_id, start_seconds, end_seconds)
+            except AuthError as exc:
+                raise ConfigEntryAuthFailed from exc
+            except ApiError:
+                continue  # Optional recovery must not break fire polling.
+            if not complete:
+                continue
+            times = [self._event_time(event) for event in events]
+            identities = [self._event_identity(event) for event in events]
+            if (len(identities) != len(set(identities))
+                    or any("hub" in event and (not isinstance(event["hub"], dict)
+                           or event["hub"].get("id") != hub_id)
+                           for event in events)
+                    or any(time is None or not start <= time <= end for time in times)
+                    or times != sorted(times, reverse=True)):
+                continue
+            self.faults.reconcile(hub_id, detectors, events, start, end,
+                                  self._event_code, self._event_time)
 
     def request_alarm_reconciliation(self) -> None:
         self._last_alarm_fetch = None
@@ -311,3 +366,4 @@ class LiviSenseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             raise ConfigEntryAuthFailed from exc
         except ApiError as exc:
             raise UpdateFailed(str(exc)) from exc
+

@@ -278,3 +278,76 @@ and absent from both REST events and detector state cannot be recovered. A clear
 missed while offline can leave a recovered fire active until reload or another
 clear; a real new fire always overrides a prior clear. These are cloud-data
 limitations, not verified physical-fire behavior.
+
+
+## Fault evidence policy (PR #10)
+
+The reproduced HEATCAVIUS app-low/HA-unknown case is consistent with the old
+implementation: only live 1384/3384 and 1381/3381 updated diagnostic flags;
+startup read hub state and unacknowledged **alarm** events, not activity. Neither
+null `batteryLevel`/`warning`/`signalStrength` nor online connectivity supplies a
+baseline. The app's additional battery source remains unknown. No account or
+physical detector was accessed for this change.
+
+Fault attribution is deliberately stricter than fire attribution. Only explicit,
+agreeing `subject.id`/`device.id` belonging to a supported detector on that hub
+are accepted. Hub subjects and conflicting/malformed references are ambiguous;
+`actor`, names, serials and single-detector guessing are never used. Ambiguous
+faults/recoveries invalidate possible targets rather than set a common state.
+An explicit unsupported/unknown device affects no known detector. Fire routing
+and all smoke/heat recovery rules from PR #9 are unchanged.
+
+1384/3384 and 1381/3381 are paired detector transitions. 1302/3302 are hub-only.
+1380/1389 establish detector trouble, but have no documented clear. Neither a
+successful test nor guessed 3380/3389 clears it. 1344 is RF jamming; the table's
+historical "trouble" grouping is not evidence of detector scope or recovery,
+so it does not set individual detector trouble. No drill or test is initiated.
+No unverified non-null current field is interpreted as a specific fault or health.
+
+### Activity recovery contract and uncertainty
+
+Each attempt requests `from=until-604800`, integer Unix seconds, `perPage=300`,
+`page=1`. At most three pages/900 events are accepted. Polling, reconnects and
+ordinary reloads share a five-minute attempt budget. There is no scan of older
+windows, inferred next URL, or immediate retry of 429. Errors and incomplete
+history leave recovery unresolved without breaking alarm polling.
+
+The **captured** response above has no pagination or retention guarantee.
+`hints: {}` and an apparently short page do not prove completeness. As a defensive
+compatibility contract, the code accepts only exact requested `meta.from`/`until`,
+`sort: "desc"` and an integer `total` equal to the accumulated record count. If
+more than one page is needed, `currentPage` and `lastPage` must explicitly allow
+bounded traversal; changed totals, contradictory pages, duplicates, malformed
+records, timestamps outside the window and non-descending records invalidate
+recovery. Extra `hub` references must agree with the endpoint's hub.
+
+**`total`, `currentPage`, `lastPage` and the meaning of completeness are not
+confirmed cloud fields.** Fixtures using them are synthetic, not newly captured
+traffic. The documented no-total response is deliberately rejected as incomplete.
+A future sanitized capture/service contract must verify how all activity pages
+and filtering/retention work before relaxing this rule. Counts alone cannot
+prove that the backend has retained every physical transition; correctness is
+conditional on the source honoring its coverage contract. The seven-day suffix
+can establish a latest transition within it, but absence never establishes health
+or reconstructs a fault older than the suffix without a covered checkpoint.
+
+Live events require aware ISO `happenedAt` timestamps at/after the current stream
+boundary, at/before receipt. Pre-stream replays cannot establish current status.
+Per-hub/device/diagnostic watermarks prevent older REST or WebSocket records from
+replacing newer evidence. Equal timestamps with conflicting values are unknown;
+ambiguous identities likewise establish no value. An untimed live fault cannot
+be ordered against subsequent evidence, so that diagnostic remains unknown in
+the retained cache. A fresh process with complete history can build a new baseline.
+
+Only fault evidence is kept in an entry-scoped in-memory cache on ordinary
+unload/reload. It contains UUID-scoped transitions/timestamps, no credentials,
+serials or raw payloads, and is not written to disk or logs. Gaps hide prior
+battery/signal values until a complete suffix covers the saved checkpoint, or a
+fresh live transition establishes that diagnostic. A checkpoint outside the
+window cannot bridge missing events. Trouble is latched without an invented
+clear; missing history cannot establish a clear trouble state. Process restarts
+require fresh evidence. The cache is not proof that a detector has been repaired.
+
+Tests verify code behavior and conservative rejection of insufficient sources;
+they do not verify the official app's current battery source or the basement
+laundry detector. See [PR #10 verification](pr-10-review.md).

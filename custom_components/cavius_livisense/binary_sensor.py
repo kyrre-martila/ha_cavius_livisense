@@ -108,4 +108,5 @@ class DetectorFlag(CoordinatorEntity, BinarySensorEntity):
     def is_on(self):
         if self.key in ("smoke", "heat"):
             return self.coordinator.alarm_state(self.hub_id, self.device_id)
-        return self.coordinator.flags.get(self.device_id, {}).get(self.key)
+        return self.coordinator.faults.value(self.hub_id, self.device_id, self.key)
+

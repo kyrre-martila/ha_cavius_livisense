@@ -56,6 +56,7 @@ async def test_setup_unload_reload_and_offline_hub(hass):
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hubs", return_value={"data": [{"id": "hub-id"}]}) as list_hubs,
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[]),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.activity", return_value=([], False)),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.health", return_value={"status": "ok", "issues": []}) as health,
         patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
     ):
@@ -105,6 +106,7 @@ async def test_standard_diagnostics_download(hass, hass_client):
         patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["private-hub"]}) as profile,
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub) as get_hub,
         patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[]),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.activity", return_value=([], False)),
         patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -123,4 +125,39 @@ async def test_standard_diagnostics_download(hass, hass_client):
         assert "private" not in str(result["data"]).lower()
         profile.assert_not_awaited()
         get_hub.assert_not_awaited()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+
+async def test_fault_cache_is_scoped_to_entry_and_bridged_after_reload(hass, freezer):
+    from datetime import UTC, datetime, timedelta
+
+    freezer.move_to("2026-11-14T12:00:00Z")
+    entry = MockConfigEntry(domain=DOMAIN, title="Cavius", data={"email": "a", "password": "b"})
+    entry.add_to_hass(hass)
+    hub = {"id": "hub", "state": {"status": "online"}, "devices": [
+        {"id": "heat", "name": "Laundry", "model": "HEATCAVIUS", "state": {}}]}
+    fault = {"code": 1384, "subject": {"id": "heat"}, "happenedAt": "2026-11-14T11:59:00Z"}
+    with (
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["hub"]}),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[]),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.activity", return_value=([fault], True)) as activity,
+        patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert hass.states.get("binary_sensor.laundry_battery_low").state == "on"
+        first = entry.runtime_data.faults
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        freezer.tick(timedelta(minutes=5))
+        # Complete suffix still contains the detector fault; a different entry
+        # cannot pick up this entry's private cache.
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.runtime_data.faults is first
+        assert activity.await_count == 2
+        assert first.coverage["hub"] == datetime.now(UTC).replace(microsecond=0)
+        assert hass.states.get("binary_sensor.laundry_battery_low").state == "on"
+        assert entry.entry_id not in hass.data[DOMAIN + "_fault_cache"]
         assert await hass.config_entries.async_unload(entry.entry_id)

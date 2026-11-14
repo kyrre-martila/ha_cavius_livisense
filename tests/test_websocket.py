@@ -31,6 +31,7 @@ async def test_state_merge_and_dispatch(hass):
 @pytest.mark.asyncio
 async def test_keepalive_and_clean_stop():
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     coordinator = MagicMock()
     listener = LiviSenseWebSocket(client, coordinator)
     ws = MagicMock(closed=False)
@@ -46,6 +47,7 @@ async def test_keepalive_and_clean_stop():
 @pytest.mark.asyncio
 async def test_reception_and_reconnect():
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     client.access_token = AsyncMock(return_value="token")
     coordinator = MagicMock()
     coordinator.async_request_refresh = AsyncMock()
@@ -99,6 +101,7 @@ async def test_reception_and_reconnect():
 @pytest.mark.asyncio
 async def test_auth_failure_requests_reauth_once():
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     client.access_token = AsyncMock(side_effect=AuthError("rejected"))
     coordinator = MagicMock()
     entry = MagicMock()
@@ -112,6 +115,7 @@ async def test_auth_failure_requests_reauth_once():
 @pytest.mark.parametrize("refresh_path", ["scheduled", "manual"])
 async def test_refresh_and_merge_are_serialized(hass, refresh_path):
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     coordinator = LiviSenseCoordinator(hass, client)
     coordinator.async_set_updated_data({"hub": {"hub": {"id": "hub", "state": {"status": "offline"}, "devices": []}}})
     entered = asyncio.Event()
@@ -143,6 +147,7 @@ async def test_refresh_and_merge_are_serialized(hass, refresh_path):
 @pytest.mark.asyncio
 async def test_websocket_first_then_rest_and_refresh_request(hass):
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     client.unacknowledged_alarms = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     client.hub = AsyncMock(return_value={"data": {"id": "hub", "state": {"status": "offline"}, "devices": []}})
@@ -180,6 +185,7 @@ async def test_websocket_diagnostics_transitions(hass):
 async def test_stop_clears_connectivity_and_allows_restart():
     coordinator = MagicMock()
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     listener = LiviSenseWebSocket(client, coordinator)
     listener._run = AsyncMock()
     listener.start()
@@ -207,6 +213,7 @@ def test_documented_message_shapes():
 async def test_reload_stop_during_keepalive_cleanup():
     """Cancelling the listener during child cleanup must not reconnect."""
     client = MagicMock()
+    client.activity = AsyncMock(return_value=([], False))
     client.access_token = AsyncMock(return_value="token")
     coordinator = MagicMock()
     coordinator.async_request_refresh = AsyncMock()
@@ -250,3 +257,4 @@ async def test_reload_stop_during_keepalive_cleanup():
         if not stop.done():
             stop.cancel()
             await stop
+
