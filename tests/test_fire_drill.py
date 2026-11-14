@@ -1,6 +1,4 @@
 """Regression tests for issue #5: drills must not become fire alarms."""
-from unittest.mock import Mock
-
 import pytest
 
 pytest.importorskip("homeassistant")
