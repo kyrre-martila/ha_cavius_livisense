@@ -1,4 +1,4 @@
-# PR #10 review and verification — follow-up 10b
+# PR #10 review and verification — follow-ups 10b and 10c
 
 Continues the existing PR #10, branch `fix/reliable-detector-fault-status`.
 Reviewed head `ec8e420f0783bb4100b422a7a7803b407ca840d7`, based on main
@@ -110,7 +110,7 @@ python -m compileall -q custom_components tests
 git diff --check
 ```
 
-Final results: **205 passed in 5.01s**, no skips. Compilation and `git diff --check`
+10b results: **205 passed in 5.01s**, no skips. Compilation and `git diff --check`
 passed. Ruff exits 1 with **33 pre-existing findings**; a separate archive of the
 starting PR #10 source has the identical file/rule/message multiset: **zero new
 findings and zero removed findings**. HA fixture teardown requires execution
@@ -125,3 +125,70 @@ duplicate replay, partial-history/omitted-newer-event, documented-envelope,
 rate-budget and real HA reload regressions. An older assertion that a report
 received while a hub is offline could confirm a current battery fault was changed
 to require unknown while retaining the observed event.
+
+
+## Follow-up 10c: first live confirmation review
+
+Reviewed existing PR #10 head `21e6c2e6d84e8ebf09b9dab2522ac74d22ed58fc`.
+The suspected observation-mutation bug was **not reproduced**. The intended
+first-live-delivery behavior already passes against that code; claiming to have
+produced a failing regression on the original implementation would be incorrect.
+No production code change is justified or included in this follow-up.
+
+The exact execution order is:
+
+1. `observed = self.observations.get(identity)` binds the local to the original
+   immutable tuple, for example `(timestamp, 1384, "activity")`.
+2. Assigning `(timestamp, 1384, "websocket")` to the dictionary replaces its value;
+   it neither mutates the old tuple nor rebinds the local `observed`.
+3. The duplicate-record branch reads the original `observed[2] == "activity"`,
+   and confirms the first qualifying live delivery.
+4. On a second live call, `observed` is the replacement WebSocket tuple. After a
+   gap invalidates confirmation, that duplicate cannot reconfirm it.
+
+The new unit regressions retain the original tuple and verify both identity
+(`is not` the replacement) and contents after `apply()`, as well as confirmation
+for battery low/recovered and signal lost/recovered. They also cover two live
+deliveries in one connection, replay after a gap, equal-time opposite transitions,
+repeated conflicts, older evidence and a distinctly newer resolving transition.
+Coordinator tests verify that a history observation cannot become confirmed when
+the hub is offline, the socket is disconnected, the event predates the stream,
+or its timestamp is missing, invalid or in the future.
+
+**Independent review outcome:** no actual defect was found in the first-live or
+duplicate-detection paths reviewed. Watermarks prevent an older first live
+delivery from overwriting newer evidence. Equal-time conflicting battery/signal
+transitions remain unknown even on repeated activity/live delivery. Untimed
+records remain conservatively unorderable. First live delivery of an activity
+observation is distinguished from a duplicate already seen live, and the
+coordinator's stream/hub checks gate confirmation. Smoke/heat fire code remains
+unchanged; `git diff --exit-code -- custom_components` passed for this follow-up.
+
+### 10c verification
+
+Environment and full-suite commands are as listed above. Results:
+
+- Focused new tests against the unchanged implementation: **36 passed in 1.00s**.
+- Complete suite: **241 passed in 5.31s**, no skips, internet sockets disabled.
+- Ruff: **33 pre-existing findings**, zero new and zero removed findings, comparing
+  file/rule/message multisets against a separate archive of the starting 10b
+  source. Ruff exits 1 because of those existing findings.
+- `python -m compileall -q custom_components tests` and `git diff --check` passed.
+
+As a sensitivity control, an isolated copy under `/tmp` deliberately changed the
+check to read `self.observations[identity][2]` (the new tuple) instead of the local
+old tuple. All four first-live unit cases then failed at the confirmation
+assertion: **4 failed, 8 deselected in 0.18s**, as expected. This was a deliberately
+faulty copy, not a failure of the PR code. No production file was modified for
+the control. The committed tests exercise the original implementation, not that
+copy. The focused command was:
+
+```sh
+/workspace/ha-venv/bin/python -m pytest -q tests/test_fault_confirmation.py tests/test_fault_recovery.py::test_first_live_delivery_of_activity_requires_current_stream_and_online_hub --timeout=15 --disable-socket --allow-unix-socket
+```
+
+The cloud-evidence limitations from 10b remain: documented activity may omit newer
+opposite transitions and cannot establish the detector's current battery state.
+The known HEATCAVIUS laundry-room report remains unverified and is not claimed
+resolved. No authenticated cloud requests, physical alarms, drills, detector tests
+or battery actions were performed. The existing PR #10 remains open and unmerged.

@@ -447,3 +447,30 @@ async def test_first_live_delivery_of_current_activity_observation_can_confirm(c
     coordinator.set_websocket_connected(True)
     await coordinator.async_apply_message("hub:event", event)
     assert status(coordinator) is None  # Its second live delivery cannot close the gap.
+
+
+@pytest.mark.parametrize("code,key", [(1384, "battery"), (3384, "battery"),
+                                      (1381, "signal"), (3381, "signal")])
+@pytest.mark.parametrize("condition", ["offline", "disconnected", "before_stream", "missing", "invalid", "future"])
+async def test_first_live_delivery_of_activity_requires_current_stream_and_online_hub(coordinator, code, key, condition):
+    coordinator.client.activity.return_value = [detector_event(code, 0)]
+    await coordinator.async_refresh()
+    coordinator.set_websocket_connected(True)
+    event = detector_event(code, 0)
+    if condition == "offline":
+        await coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "offline"}}})
+    elif condition == "disconnected":
+        coordinator.set_websocket_connected(False)
+    elif condition == "before_stream":
+        coordinator._fault_stream_started = NOW + timedelta(seconds=1)
+    elif condition == "missing":
+        event.pop("happenedAt")
+    elif condition == "invalid":
+        event["happenedAt"] = "not-a-timestamp"
+    else:
+        event["happenedAt"] = (NOW + timedelta(seconds=1)).isoformat()
+    await coordinator.async_apply_message("hub:event", event)
+    identity = ("hub", "heat", key)
+    assert coordinator.faults.value(*identity) is None
+    assert identity not in coordinator.faults.confirmed
+    assert status(coordinator, key, "smoke") is None
