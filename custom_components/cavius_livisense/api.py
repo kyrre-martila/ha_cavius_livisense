@@ -113,46 +113,24 @@ class LiviSenseClient:
         return events
 
 
-    async def activity(self, hub_id: str, start: int, end: int) -> tuple[list[dict[str, Any]], bool]:
-        """Bound one seven-day suffix to three pages; reject unproven completeness.
+    async def activity(self, hub_id: str, start: int, end: int) -> list[dict[str, Any]]:
+        """Read one documented window, without assuming pagination or completeness.
 
-        The captured schema has no pagination guarantee. Explicit total and page
-        metadata below are a defensive compatibility contract, not observed API
-        behavior. Missing metadata must never turn a partial page into state.
+        Meta hints are opaque. No captured contract identifies the newest page
+        or proves the absence of omitted newer events. Limit processing to 300
+        records; neither a short response nor a count can establish current state.
         """
         if not 0 < end - start <= 7 * 86400:
             raise ValueError("Activity requires a positive window of at most seven days")
-        records = []
-        expected_total = None
-        for page in range(1, 4):
-            response = await self._request(
-                "GET", f"/api/hubs/{quote(hub_id, safe='')}/activity",
-                params={"from": start, "until": end, "perPage": 300, "page": page},
-            )
-            data, meta = response.get("data"), response.get("meta")
-            if (not isinstance(data, list) or len(data) > 300
-                    or not all(isinstance(item, dict) for item in data)
-                    or not isinstance(meta, dict)):
-                return [], False
-            total = meta.get("total")
-            if (type(total) is not int or total < 0 or total > 900
-                    or meta.get("from") != start or meta.get("until") != end
-                    or meta.get("sort") != "desc"):
-                return [], False
-            if expected_total is not None and total != expected_total:
-                return [], False
-            expected_total = total
-            records.extend(data)
-            if len(records) == total:
-                if (meta.get("currentPage", page) != page
-                        or meta.get("lastPage", page) != page):
-                    return [], False
-                return records, True
-            # Follow only an explicit, consistent pagination contract. Never
-            # guess a next URL, scan older windows, or immediately retry 429.
-            if (not data or len(records) > total
-                    or meta.get("currentPage") != page
-                    or type(meta.get("lastPage")) is not int
-                    or not page < meta["lastPage"] <= 3):
-                return [], False
-        return [], False
+        response = await self._request(
+            "GET", f"/api/hubs/{quote(hub_id, safe='')}/activity",
+            params={"from": start, "until": end},
+        )
+        data, meta = response.get("data"), response.get("meta")
+        if (not isinstance(data, list) or not isinstance(meta, dict)
+                or type(meta.get("from")) is not int or meta["from"] != start
+                or type(meta.get("until")) is not int or meta["until"] != end
+                or meta.get("sort") != "desc"
+                or not all(isinstance(item, dict) for item in data[:300])):
+            raise ApiError("Malformed activity window")
+        return data[:300]

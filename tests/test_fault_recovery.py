@@ -32,7 +32,7 @@ def coordinator(hass, freezer):
         {"id": "remote", "model": "REMOTECAVIUS", "state": {}},
     ]})
     client.unacknowledged_alarms = AsyncMock(return_value=[])
-    client.activity = AsyncMock(return_value=([], False))
+    client.activity = AsyncMock(return_value=[])
     result = LiviSenseCoordinator(hass, client)
     result._fault_stream_started = NOW - timedelta(days=1)
     return result
@@ -44,10 +44,11 @@ def status(coordinator, key="battery", device="heat"):
 
 @pytest.mark.parametrize("code,key,value", [(1384, "battery", True), (3384, "battery", False),
     (1381, "signal", True), (3381, "signal", False), (1380, "trouble", True), (1389, "trouble", True)])
-async def test_startup_complete_suffix(coordinator, code, key, value):
-    coordinator.client.activity.return_value = ([detector_event(code)], True)
+async def test_startup_observations_without_completeness(coordinator, code, key, value):
+    coordinator.client.activity.return_value = [detector_event(code)]
     await coordinator.async_refresh()
-    assert status(coordinator, key) is value
+    assert status(coordinator, key) is (value if key == "trouble" else None)
+    assert DetectorFlag(coordinator, "hub", "heat", key).extra_state_attributes["last_observed_event_code"] == code
     assert status(coordinator, key, "smoke") is None
     assert coordinator.alarm_state("hub", "heat") is False
 
@@ -113,23 +114,22 @@ async def test_unorderable_event_is_unknown(coordinator, timestamp):
     assert status(coordinator) is None
 
 
-@pytest.mark.parametrize("events,complete", [
-    ([], True), ([detector_event(1384)], False),
-    ([detector_event(1384, -8 * 86400)], True),
-    ([detector_event(1384, 1)], True),
-    ([detector_event(1384, -90), detector_event(3384, -30)], True),
-    ([{"code": 1384, "subject": {"id": "heat"}}], True),
+@pytest.mark.parametrize("events", [
+    [], [detector_event(1384)], [detector_event(1384, -8 * 86400)],
+    [detector_event(1384, 1)],
+    [detector_event(1384, -90), detector_event(3384, -30)],
+    [{"code": 1384, "subject": {"id": "heat"}}],
 ])
-async def test_partial_empty_or_invalid_history_is_unknown(coordinator, events, complete):
-    coordinator.client.activity.return_value = (events, complete)
+async def test_partial_empty_or_invalid_history_is_unknown(coordinator, events):
+    coordinator.client.activity.return_value = events
     await coordinator.async_refresh()
     assert status(coordinator) is None
 
 
 async def test_history_latest_recovery_and_ambiguous_recovery(coordinator):
-    coordinator.client.activity.return_value = ([detector_event(3384, -20), detector_event(1384, -60)], True)
+    coordinator.client.activity.return_value = [detector_event(3384, -20), detector_event(1384, -60)]
     await coordinator.async_refresh()
-    assert status(coordinator) is False
+    assert status(coordinator) is None  # The list may omit a newer low event.
     await coordinator.async_apply_message("hub:event", record(1384, -10))
     assert status(coordinator) is None
     await coordinator.async_apply_message("hub:event", detector_event(3384, -5))
@@ -137,8 +137,9 @@ async def test_history_latest_recovery_and_ambiguous_recovery(coordinator):
 
 
 async def test_disconnect_reconnect_gap_and_rate_budget(coordinator, freezer):
-    coordinator.client.activity.return_value = ([detector_event(1384)], True)
+    coordinator.client.activity.return_value = [detector_event(1384)]
     await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(1384, -30))
     assert status(coordinator) is True
     coordinator.set_websocket_connected(True)
     coordinator.set_websocket_connected(False)
@@ -149,39 +150,43 @@ async def test_disconnect_reconnect_gap_and_rate_budget(coordinator, freezer):
     assert coordinator.client.activity.await_count == 1
     assert status(coordinator) is None
     freezer.tick(timedelta(minutes=5))
-    coordinator.client.activity.return_value = ([detector_event(3384, 60), detector_event(1384)], True)
+    coordinator.client.activity.return_value = [detector_event(3384, 60), detector_event(1384)]
     await coordinator.async_refresh()
+    assert status(coordinator) is None  # Partial history cannot close a gap.
+    await coordinator.async_apply_message("hub:event", detector_event(3384, 300))
     assert status(coordinator) is False
     await coordinator.async_apply_message("hub:event", detector_event(1384, -10))
     assert status(coordinator) is False
 
 
-async def test_reload_checkpoint_requires_complete_bridge(coordinator, hass, freezer):
-    coordinator.client.activity.return_value = ([detector_event(1384)], True)
+async def test_reload_retains_observations_but_never_stale_healthy_state(coordinator, hass, freezer):
     await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(3384))
+    assert status(coordinator) is False
     coordinator.set_websocket_connected(False)
     reloaded = LiviSenseCoordinator(hass, coordinator.client)
     reloaded.faults = coordinator.faults
     await reloaded.async_refresh()
     assert status(reloaded) is None
     freezer.tick(timedelta(minutes=5))
-    reloaded.client.activity.return_value = ([], False)
+    reloaded.client.activity.return_value = [detector_event(3384)]
     await reloaded.async_refresh()
     assert status(reloaded) is None
-    freezer.tick(timedelta(minutes=5))
-    reloaded.client.activity.return_value = ([detector_event(1384)], True)
-    await reloaded.async_refresh()
+    assert reloaded.faults.attributes("hub", "heat", "battery")["last_observed_event_code"] == 3384
+    await reloaded.async_apply_message("hub:event", detector_event(1384, 300))
     assert status(reloaded) is True
 
 
-async def test_expired_checkpoint_not_carried_through_empty_window(coordinator, freezer):
-    coordinator.client.activity.return_value = ([detector_event(1384)], True)
+async def test_old_observation_and_empty_window_do_not_restore_state(coordinator, freezer):
     await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(1384))
+    assert status(coordinator) is True
     coordinator.set_websocket_connected(False)
     freezer.tick(timedelta(days=8))
-    coordinator.client.activity.return_value = ([], True)
+    coordinator.client.activity.return_value = []
     await coordinator.async_refresh()
     assert status(coordinator) is None
+    assert coordinator.faults.attributes("hub", "heat", "battery")["last_observed_event_code"] == 1384
 
 
 async def test_trouble_has_no_invented_recovery_or_hub_faults(coordinator):
@@ -225,20 +230,20 @@ async def test_rest_never_overwrites_newer_observed_transition(coordinator, free
     await coordinator.async_refresh()
     await coordinator.async_apply_message("hub:event", detector_event(3384, -10))
     freezer.tick(timedelta(minutes=5))
-    coordinator.client.activity.return_value = ([detector_event(1384, -60)], True)
+    coordinator.client.activity.return_value = [detector_event(1384, -60)]
     await coordinator.async_refresh()
     assert status(coordinator) is False
 
 
-async def test_checkpoint_carries_old_fault_through_complete_empty_suffix(coordinator, freezer):
-    coordinator.client.activity.return_value = ([detector_event(1384, -7 * 86400 + 60)], True)
+async def test_empty_history_never_closes_a_delivery_gap(coordinator, freezer):
     await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(1384))
     assert status(coordinator) is True
     coordinator.set_websocket_connected(False)
     freezer.tick(timedelta(minutes=5))
-    coordinator.client.activity.return_value = ([], True)
+    coordinator.client.activity.return_value = []
     await coordinator.async_refresh()
-    assert status(coordinator) is True
+    assert status(coordinator) is None
 
 
 async def test_unattributed_recovery_invalidates_old_fault_without_clearing_others(coordinator):
@@ -269,7 +274,7 @@ async def test_fresh_live_transition_resolves_only_its_fault_after_gap(coordinat
     [{**detector_event(1384), "id": "same"}, {**detector_event(3384, -90), "id": "same"}],
 ])
 async def test_duplicate_pages_and_cross_hub_history_are_incomplete(coordinator, events):
-    coordinator.client.activity.return_value = (events, True)
+    coordinator.client.activity.return_value = events
     await coordinator.async_refresh()
     assert status(coordinator) is None
 
@@ -288,3 +293,157 @@ async def test_hub_offline_gap_is_recorded_even_inside_activity_budget(coordinat
     await coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "online"}}})
     assert status(coordinator) is None
     assert coordinator.client.activity.await_count == 1
+
+
+@pytest.mark.parametrize("code,key", [(1384, "battery"), (3384, "battery"),
+                                      (1381, "signal"), (3381, "signal")])
+async def test_delayed_preconnection_delivery_is_retained_as_unconfirmed_evidence(coordinator, code, key):
+    await coordinator.async_refresh()
+    coordinator.set_websocket_connected(True)  # Connection boundary is NOW.
+    delayed = detector_event(code, -1)  # Generated just before connection, not a guessed grace period.
+    await coordinator.async_apply_message("hub:event", delayed)
+    entity = DetectorFlag(coordinator, "hub", "heat", key)
+    assert entity.is_on is None  # Delayed delivery and replay cannot yet be distinguished.
+    assert entity.extra_state_attributes == {
+        "last_observed_event_at": (NOW - timedelta(seconds=1)).isoformat(),
+        "last_observed_event_code": code,
+        "last_observed_event_source": "websocket",
+        "current_status_confirmed": False,
+    }
+    assert coordinator.faults.records[("hub", "heat", key)][0] == NOW - timedelta(seconds=1)
+    # A newer event generated in this stream establishes current state.
+    await coordinator.async_apply_message("hub:event", detector_event(code, 0))
+    assert entity.is_on is (code in (1384, 1381))
+    assert entity.extra_state_attributes["current_status_confirmed"]
+
+
+@pytest.mark.parametrize("code,old_code,key", [(1384, 3384, "battery"), (3384, 1384, "battery"),
+                                               (1381, 3381, "signal"), (3381, 1381, "signal")])
+async def test_delayed_stale_and_duplicate_events_never_replace_newer_current_evidence(coordinator, code, old_code, key):
+    await coordinator.async_refresh()
+    coordinator.set_websocket_connected(True)
+    await coordinator.async_apply_message("hub:event", detector_event(code, 0))
+    entity = DetectorFlag(coordinator, "hub", "heat", key)
+    for event in (detector_event(old_code, -1), detector_event(code, 0), detector_event(old_code, -86400)):
+        await coordinator.async_apply_message("hub:event", event)
+        assert entity.is_on is (code in (1384, 1381))
+        assert entity.extra_state_attributes["last_observed_event_code"] == code
+
+
+async def test_delayed_newer_event_in_gap_invalidates_old_healthy_state(coordinator, freezer):
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(3384, -60))
+    assert status(coordinator) is False
+    coordinator.set_websocket_connected(False)
+    freezer.tick(timedelta(seconds=10))
+    coordinator.set_websocket_connected(True)
+    await coordinator.async_apply_message("hub:event", detector_event(1384, 5))
+    assert status(coordinator) is None
+    assert coordinator.faults.attributes("hub", "heat", "battery")["last_observed_event_code"] == 1384
+    await coordinator.async_apply_message("hub:event", detector_event(3384, -60))
+    assert status(coordinator) is None
+    freezer.tick(timedelta(seconds=1))
+    await coordinator.async_apply_message("hub:event", detector_event(1384, 11))
+    assert status(coordinator) is True
+
+
+async def test_duplicate_recovery_does_not_reconfirm_state_after_gap(coordinator):
+    await coordinator.async_refresh()
+    recovery = detector_event(3384, 0)
+    await coordinator.async_apply_message("hub:event", recovery)
+    assert status(coordinator) is False
+    coordinator.set_websocket_connected(False)
+    coordinator.set_websocket_connected(True)
+    # Even if the reconnect has the same timestamp, a duplicate cannot heal a gap.
+    await coordinator.async_apply_message("hub:event", recovery)
+    assert status(coordinator) is None
+
+
+@pytest.mark.parametrize("code", [1384, 3384])
+async def test_documented_activity_shape_does_not_prove_latest_fault_or_recovery(coordinator, code):
+    from custom_components.cavius_livisense.api import LiviSenseClient
+
+    # Synthetic detector event in the documented envelope. No count/page fields.
+    response = {"data": [{"code": code, "subject": {"id": "heat"},
+                          "happenedAt": (NOW - timedelta(minutes=1)).isoformat()}],
+                "meta": {"from": int(NOW.timestamp()) - 7 * 86400,
+                         "until": int(NOW.timestamp()), "sort": "desc", "hints": {}}}
+    api_client = LiviSenseClient(MagicMock(), "unused", "unused")
+    api_client._request = AsyncMock(return_value=response)
+    coordinator.client.activity = api_client.activity
+    await coordinator.async_refresh()
+    assert status(coordinator) is None  # A newer opposite transition could be omitted.
+    attributes = coordinator.faults.attributes("hub", "heat", "battery")
+    assert attributes["last_observed_event_code"] == code
+    assert attributes["last_observed_event_source"] == "activity"
+    assert not attributes["current_status_confirmed"]
+    api_client._request.assert_awaited_once()
+
+
+async def test_newer_partial_history_invalidates_older_live_healthy_value(coordinator, freezer):
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(3384, -60))
+    assert status(coordinator) is False
+    freezer.tick(timedelta(minutes=5))
+    coordinator.client.activity.return_value = [detector_event(1384, 1)]
+    await coordinator.async_refresh()
+    assert status(coordinator) is None
+    assert coordinator.faults.attributes("hub", "heat", "battery")["last_observed_event_code"] == 1384
+
+
+async def test_full_restart_has_no_implicit_baseline(coordinator, hass):
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:event", detector_event(3384))
+    assert status(coordinator) is False
+    restarted = LiviSenseCoordinator(hass, coordinator.client)
+    await restarted.async_refresh()
+    assert status(restarted) is None
+    assert restarted.faults.records == {}
+    assert restarted.faults.attributes("hub", "heat", "battery") == {}
+
+
+async def test_hub_gap_delayed_delivery_is_not_confirmed_from_an_older_socket(coordinator, freezer):
+    await coordinator.async_refresh()
+    await coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "offline"}}})
+    freezer.tick(timedelta(seconds=10))
+    await coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "online"}}})
+    await coordinator.async_apply_message("hub:event", detector_event(3384, 5))
+    assert status(coordinator) is None
+    assert coordinator.faults.attributes("hub", "heat", "battery")["last_observed_event_code"] == 3384
+
+
+async def test_delayed_event_within_continuous_stream_updates_current_watermark(coordinator, freezer):
+    await coordinator.async_refresh()
+    coordinator.set_websocket_connected(True)
+    await coordinator.async_apply_message("hub:event", detector_event(1384, 0))
+    freezer.tick(timedelta(seconds=10))
+    # A redundant status frame is not a new connection or a delivery gap.
+    await coordinator.async_apply_message("hub:state", {"hub": {"id": "hub", "state": {"status": "online"}}})
+    await coordinator.async_apply_message("hub:event", detector_event(3384, 5))
+    assert status(coordinator) is False
+    await coordinator.async_apply_message("hub:event", detector_event(1384, 1))
+    assert status(coordinator) is False
+
+
+async def test_post_disconnect_delivery_is_observation_until_connection_is_restored(coordinator, freezer):
+    await coordinator.async_refresh()
+    coordinator.set_websocket_connected(False)
+    freezer.tick(timedelta(seconds=1))
+    await coordinator.async_apply_message("hub:event", detector_event(3384, 1))
+    assert status(coordinator) is None
+    assert coordinator.faults.attributes("hub", "heat", "battery")["last_observed_event_code"] == 3384
+
+
+async def test_first_live_delivery_of_current_activity_observation_can_confirm(coordinator):
+    coordinator.client.activity.return_value = [detector_event(1384, 0)]
+    await coordinator.async_refresh()
+    assert status(coordinator) is None
+    coordinator.set_websocket_connected(True)
+    event = detector_event(1384, 0)
+    await coordinator.async_apply_message("hub:event", event)
+    assert status(coordinator) is True
+    assert coordinator.faults.attributes("hub", "heat", "battery")["last_observed_event_source"] == "websocket"
+    coordinator.set_websocket_connected(False)
+    coordinator.set_websocket_connected(True)
+    await coordinator.async_apply_message("hub:event", event)
+    assert status(coordinator) is None  # Its second live delivery cannot close the gap.

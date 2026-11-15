@@ -110,3 +110,9 @@ class DetectorFlag(CoordinatorEntity, BinarySensorEntity):
             return self.coordinator.alarm_state(self.hub_id, self.device_id)
         return self.coordinator.faults.value(self.hub_id, self.device_id, self.key)
 
+
+    @property
+    def extra_state_attributes(self):
+        if self.key in ("smoke", "heat"):
+            return None
+        return self.coordinator.faults.attributes(self.hub_id, self.device_id, self.key)

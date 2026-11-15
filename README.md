@@ -46,45 +46,57 @@ The integration listens for documented WebSocket state changes and polls the RES
 
 ## Reliable fault evidence
 
-Fault events require an explicit detector ID in `device.id` or `subject.id`, with
-agreement if both are present. Hub subjects, actor IDs, names and missing or
-conflicting identities never broadcast battery or signal faults. An ambiguous
-fault/recovery makes the affected diagnostic unknown where it could apply.
-Hub battery codes 1302/3302 never affect detector batteries.
+Battery events 1384/3384 and signal events 1381/3381 require an explicit detector
+ID in `device.id` or `subject.id`, agreeing if both exist. Hub subjects, actor IDs,
+names and missing/conflicting identities never broadcast detector faults. Ambiguous
+evidence makes possible targets unknown. Hub battery codes 1302/3302 never affect
+detector batteries. Trouble events 1380/1389 latch an observed failure; no recovery
+is documented, and tests or guessed recovery codes never clear it.
 
-Live faults require an aware `happenedAt` within the current WebSocket stream.
-Older replays cannot establish current status. Newer timestamps win; conflicting
-transitions at the same timestamp are unknown. Missing, invalid or future
-fault timestamps are unorderable and leave that diagnostic unknown, including
-through reloads. Null fields, normal signal strength, successful tests and an
-online WebSocket do not establish a healthy battery or clear trouble.
+Event timestamps and per-detector watermarks order received evidence. Older events
+cannot overwrite newer ones; conflicting equal timestamps are unknown. Duplicates
+do not renew confidence lost through a delivery gap. A delayed event generated
+before connection is retained as an observation, rather than silently discarded.
+It cannot establish current battery/signal state without proof that newer events
+were not missed. A newer event generated within the current continuous WebSocket
+stream can establish that diagnostic, including a delayed delivery within that
+stream. Offline hub/reconnect boundaries invalidate old confidence. No arbitrary
+delay grace period is used. Missing, invalid or future timestamps leave the
+diagnostic unknown; untimed evidence cannot be ordered against later events.
 
-Startup and periodic recovery request one seven-day `/activity` window, capped
-at three pages of 300 records per hub, at most once every five minutes. Reconnects
-and reloads share this budget. No older windows are scanned; 429/network errors
-are not immediately retried. Fault recovery failure does not stop fire polling.
-Only a complete window with consistent coverage/count metadata, descending valid
-timestamps and no duplicate records can restore the latest scoped transition.
-An empty window never establishes healthy status. Truncated, misordered or
-ambiguous history stays unknown.
+The diagnostic entity attributes `last_observed_event_code`,
+`last_observed_event_at` and `last_observed_event_source` expose an explicitly
+attributed observation without raw payloads or device identifiers. **Last observed
+means newest among received records, not latest in the cloud.**
+`current_status_confirmed` distinguishes current live evidence from historical
+observations. Trouble may be on as a latched failure report even when that attribute
+is false. Smoke/heat alarm entities and behavior from PR #9 are unchanged.
 
-**Cloud evidence limitation:** the captured activity response documents
-`meta.from`, `until`, `sort` and `hints`, but no count/pagination completeness
-contract. That captured shape alone is therefore insufficient for recovery.
-Explicit `total` (and `currentPage`/`lastPage` for multiple pages) support is
-synthetically tested and remains unverified against the service. The laundry-room
-HEATCAVIUS report is not confirmed fixed: its app battery source and actual fault
-payload have not been captured. A correctly attributed, current live 1384 event
-can report low battery even when all three REST diagnostic fields are null.
+Startup and periodic activity requests read one seven-day window per hub, at most
+once every five minutes; reloads and reconnects share that budget. Only the first
+300 returned records are processed. Pagination is undocumented: no page traversal,
+older windows or immediate 429 retries are attempted. The documented
+`meta.from`/`until`/`sort`/`hints` shape is accepted. Neither count/page fields nor
+a short or empty list prove completeness. Activity failure does not stop ordinary
+fire polling. Invalid ordering, duplicate records or wrong-hub references are
+rejected. Even an attributed low/recovery event cannot establish current battery
+or signal state if a newer opposite event might be omitted. History observations
+are retained; they do not clear delivery gaps or establish healthy status.
 
-Fault evidence is cached per config entry in memory across ordinary integration
-reloads. Battery and signal become unknown across a delivery gap until complete
-activity bridges the checkpoint or a new, ordered live transition establishes that
-particular diagnostic. A checkpoint older than the available window cannot bridge
-the gap. Trouble remains latched because no recovery semantics are documented.
-Home Assistant process restarts lose this cache. See
-[API notes](docs/livisense-api.md#fault-evidence-policy-pr-10) and
-[verification](docs/pr-10-review.md).
+Fault watermarks and observations survive ordinary integration reloads in an
+entry-scoped memory cache. Reloads hide prior battery/signal values until new,
+ordered live evidence establishes them. Full Home Assistant process restarts lose
+that cache and require fresh evidence. Trouble remains a latched diagnostic report,
+not proof that a detector is still faulty or has been repaired. Missing/null state
+fields, normal signal strength and successful tests never establish battery health.
+
+**Known HEATCAVIUS case:** the documented activity response can now expose an
+observed 1384 on the battery entity, but cannot by itself restore a confirmed
+current low-battery state. That still requires qualifying live evidence or an
+additional captured/authoritative contract proving that newer events are not
+omitted (or an authoritative current battery field). The app's battery source and
+the laundry-room detector have not been verified. See [API notes](docs/livisense-api.md#fault-evidence-policy-pr-10)
+and [verification](docs/pr-10-review.md).
 
 ## Known limitations
 

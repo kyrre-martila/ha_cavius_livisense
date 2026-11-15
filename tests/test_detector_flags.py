@@ -12,7 +12,7 @@ from custom_components.cavius_livisense.binary_sensor import DetectorFlag
 @pytest.fixture
 def coordinator(hass):
     client = MagicMock()
-    client.activity = AsyncMock(return_value=([], False))
+    client.activity = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     client.hub = AsyncMock(return_value={"data": {
         "id": "hub", "state": {"status": "online"},
@@ -80,9 +80,10 @@ async def test_unknown_offline_and_failed_refresh(coordinator):
     assert sensor.available is False
     coordinator.client.unacknowledged_alarms.side_effect = Exception("cloud error")
     coordinator.request_alarm_reconciliation()
-    # Existing alarm flags survive reconnect/reload-style REST reconciliation.
+    # A report received while the hub is offline is retained, not confirmed current.
     await coordinator.async_apply_message("hub:event", event(1384, {"id": "a"}))
-    assert sensor.is_on is True
+    assert sensor.is_on is None
+    assert sensor.extra_state_attributes["last_observed_event_code"] == 1384
 
 
 @pytest.mark.asyncio

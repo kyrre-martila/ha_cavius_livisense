@@ -15,7 +15,7 @@ from custom_components.cavius_livisense.sensor import (
 @pytest.fixture
 def coordinator(hass):
     client = MagicMock()
-    client.activity = AsyncMock(return_value=([], False))
+    client.activity = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     hub = {"id": "hub", "state": {"status": "online"}, "extras": None,
            "devices": [{"id": key, "model": model, "state": {"alarm": None}}

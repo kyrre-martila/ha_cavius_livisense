@@ -27,7 +27,7 @@ def hub_data():
 @pytest.fixture
 def coordinator(hass):
     client = MagicMock()
-    client.activity = AsyncMock(return_value=([], False))
+    client.activity = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     client.hub = AsyncMock(return_value=hub_data())
     client.unacknowledged_alarms = AsyncMock(return_value=[])
@@ -156,7 +156,7 @@ async def test_real_ha_registry_reload_and_stable_ids(hass, code, alarm_state):
         patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["hub"]}),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub_data()),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[event(code)]),
-        patch("custom_components.cavius_livisense.api.LiviSenseClient.activity", return_value=([], False)),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.activity", return_value=[]),
         patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)

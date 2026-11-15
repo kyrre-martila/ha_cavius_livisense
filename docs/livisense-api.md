@@ -304,50 +304,80 @@ historical "trouble" grouping is not evidence of detector scope or recovery,
 so it does not set individual detector trouble. No drill or test is initiated.
 No unverified non-null current field is interpreted as a specific fault or health.
 
-### Activity recovery contract and uncertainty
+### Documented activity observations and uncertainty (PR #10b)
 
-Each attempt requests `from=until-604800`, integer Unix seconds, `perPage=300`,
-`page=1`. At most three pages/900 events are accepted. Polling, reconnects and
-ordinary reloads share a five-minute attempt budget. There is no scan of older
-windows, inferred next URL, or immediate retry of 429. Errors and incomplete
-history leave recovery unresolved without breaking alarm polling.
+Repository review found only the example above: `data`, with
+`meta.from`, `meta.until`, `meta.sort: "desc"` and opaque `meta.hints`. No captured
+fixture demonstrates `total`, `currentPage`, `lastPage`, a next-page token,
+retention completeness or an unfiltered newest-page guarantee. The fixture
+`tests/fixtures/activity_documented.json` copies that documentation example with
+its original placeholders; it is not a new authenticated capture. Detector fault
+variants used in tests are explicitly synthetic.
 
-The **captured** response above has no pagination or retention guarantee.
-`hints: {}` and an apparently short page do not prove completeness. As a defensive
-compatibility contract, the code accepts only exact requested `meta.from`/`until`,
-`sort: "desc"` and an integer `total` equal to the accumulated record count. If
-more than one page is needed, `currentPage` and `lastPage` must explicitly allow
-bounded traversal; changed totals, contradictory pages, duplicates, malformed
-records, timestamps outside the window and non-descending records invalidate
-recovery. Extra `hub` references must agree with the endpoint's hub.
+The previous PR #10 implementation required invented count/page metadata. That
+requirement and the corresponding speculative completeness path have been removed.
+The client now accepts the documented envelope and requests only `from` and `until`
+for one seven-day window, once per five minutes per hub, sharing an attempt budget
+through ordinary reloads and reconnects. It processes at most the first 300 returned
+records. This is a processing limit, not a proven server-side page/body-size limit.
+No hints or next-page URLs are guessed or followed, no older windows are scanned,
+and 429/network errors are not immediately retried. Time bounds must match the
+request; timestamps must be valid, within bounds, descending, without duplicates
+or cross-hub references. A malformed list supplies no trusted recovery evidence.
 
-**`total`, `currentPage`, `lastPage` and the meaning of completeness are not
-confirmed cloud fields.** Fixtures using them are synthetic, not newly captured
-traffic. The documented no-total response is deliberately rejected as incomplete.
-A future sanitized capture/service contract must verify how all activity pages
-and filtering/retention work before relaxing this rule. Counts alone cannot
-prove that the backend has retained every physical transition; correctness is
-conditional on the source honoring its coverage contract. The seven-day suffix
-can establish a latest transition within it, but absence never establishes health
-or reconstructs a fault older than the suffix without a covered checkpoint.
+Sort order only orders returned records. A short page, empty hints, an explicit
+count, or an attributed 1384/3384 does **not** prove that a newer opposite event
+was not omitted. Thus battery/signal history supplies occurrence observations,
+not current truth and not a complete bridge through reload/reconnect gaps.
+1380/1389 can latch a historical failure report because no clear is documented;
+this still does not assert that a physical problem remains unrepaired.
 
-Live events require aware ISO `happenedAt` timestamps at/after the current stream
-boundary, at/before receipt. Pre-stream replays cannot establish current status.
-Per-hub/device/diagnostic watermarks prevent older REST or WebSocket records from
-replacing newer evidence. Equal timestamps with conflicting values are unknown;
-ambiguous identities likewise establish no value. An untimed live fault cannot
-be ordered against subsequent evidence, so that diagnostic remains unknown in
-the retained cache. A fresh process with complete history can build a new baseline.
+Each fault entity exposes only the code/time/source of the newest **observed**
+scoped record, and `current_status_confirmed`. This wording does not claim latest
+in the cloud. No raw payload, serial, credential, name or device ID is exposed by
+these attributes. A newer unconfirmed history record invalidates an older live
+value rather than silently preserving stale health; older history cannot overwrite
+a newer live watermark. Missing fields never imply a healthy detector.
 
-Only fault evidence is kept in an entry-scoped in-memory cache on ordinary
-unload/reload. It contains UUID-scoped transitions/timestamps, no credentials,
-serials or raw payloads, and is not written to disk or logs. Gaps hide prior
-battery/signal values until a complete suffix covers the saved checkpoint, or a
-fresh live transition establishes that diagnostic. A checkpoint outside the
-window cannot bridge missing events. Trouble is latched without an invented
-clear; missing history cannot establish a clear trouble state. Process restarts
-require fresh evidence. The cache is not proof that a detector has been repaired.
+### Delayed live events, replay and delivery gaps
 
-Tests verify code behavior and conservative rejection of insufficient sources;
-they do not verify the official app's current battery source or the basement
-laundry detector. See [PR #10 verification](pr-10-review.md).
+`happenedAt` is compared with both the per-detector/diagnostic watermark and the
+current WebSocket/hub connection boundary. Preconnection events are no longer
+dropped. They are retained as observed occurrences, but cannot establish current
+battery/signal status unless freshness is independently established. There is no
+arbitrary grace period: delay and historical replay are indistinguishable from
+timestamps alone when newer events may have been missed.
+
+A timestamped transition generated within the current continuous live stream,
+not in the future or older than received evidence, can establish a current value.
+A delayed delivery within that stream remains valid. Normal repeated online
+status frames do not reset its boundary. Older records are ignored for state;
+exact duplicates cannot renew confidence after a gap. Equal-time contradictory
+transitions are unknown. Missing/invalid/future event times leave an unorderable
+record and keep the affected status unknown in the retained cache. An ambiguous
+identity cannot set a specific detector, even if the timestamp is fresh.
+
+On disconnect, offline hub or ordinary unload, prior battery/signal confirmation
+is invalidated. A reconnect/online transition creates a new boundary. A transition
+from inside the gap is retained but unconfirmed; a new live event after the new
+boundary can establish that diagnostic. A replay of an old recovery cannot
+silently restore a healthy value. Partial activity cannot close the gap.
+
+This relies on normal delivery of the documented realtime stream; the available
+API has no documented sequence numbers/replay cursor that could prove delivery
+completeness. No live fault payload or app battery source was verified in this
+work. Fault traffic is not promoted to fire; PR #9 smoke/heat behavior is unchanged.
+
+Only fault watermarks/observations and the attempt budget are retained in the
+entry-scoped memory cache across ordinary reloads. The cache has no credentials,
+serials or raw payloads and is not written to disk or logs. A full HA process
+restart loses it. Trouble is a latched failure report with no invented clear;
+battery/signal require fresh current evidence after a gap.
+
+**Critical outcome:** the documented response can surface a historical low-battery
+observation on the HEATCAVIUS battery entity, but cannot prove the laundry-room
+detector's current low state. Current status remains conditional on qualifying
+live events or additional captured API evidence establishing newest-event
+coverage/current-field semantics. No authenticated live access, physical-device
+action, fire drill, detector test or battery replacement was performed.
+See [PR #10 verification](pr-10-review.md).
