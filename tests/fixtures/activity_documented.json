@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "happenedAt": "2026-10-13T05:03:08.461+02:00",
+      "label": "hub.event.9996",
+      "type": "HubEvent",
+      "code": "<event code, same as in label>",
+      "actor":   { "id": "<hub uuid>", "name": "...", "type": "hub" },
+      "subject": { "id": "<hub uuid>", "name": "...", "type": "hub" }
+    }
+  ],
+  "meta": { "from": 1791270822, "until": 1791875622, "sort": "desc", "hints": {} }
+}

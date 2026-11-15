@@ -32,17 +32,71 @@ Smoke and heat detectors also have:
 
 - **Smoke alarm** (smoke detectors) or **Heat alarm** (heat detectors): active for a non-null detector alarm state (except an object carrying an explicit documented drill code), a documented fire REST event (1110/1111), or a fire WebSocket event. Hub-level events with no device ID flag all smoke and heat detectors on that hub. A device-specific event affects only that detector. Documented clear events clear the WebSocket flag; an absent REST event does not clear a WebSocket fire alarm. Unknown is shown until enough cloud data establishes a clear state.
 - **Last tested** and **Last test result:** cloud-reported diagnostic fields, when provided.
-- **Battery low:** event based warning, cleared by the documented recovery event. Battery percentage is unavailable.
-- **Signal loss:** event based diagnostic, cleared by the documented recovery event.
-- **Sensor trouble:** diagnostic set by trouble or self-test failure events. The API documents no recovery event, so this state persists until integration reload.
+- **Battery low:** detector event 1384 sets low; 3384 clears it. Unknown until reliable evidence is available. Battery percentage and the meaning of non-null warning fields are unverified.
+- **Signal loss:** detector event 1381 sets loss; 3381 clears it. Missing or null signal strength does not mean a healthy connection.
+- **Sensor trouble:** detector events 1380/1389 latch trouble. No recovery is documented; tests, battery recovery and guessed 3xxx codes never clear it. RF jamming (1344) has no verified detector scope and does not set detector trouble.
 
 Smart Remotes expose only **Last cloud update**, when available. Cloud button press delivery and the meaning of remote battery/signal values are not confirmed, so no buttons, alarm or battery/signal entities are created.
 
 Acknowledgement (9411) is not an alarm clear. Drill, acknowledgement, classification and other documented non-fire event codes do not establish fire during REST recovery. Unknown or missing REST event codes produce an unknown alarm state for their targets unless independent fire evidence is present. Recovered REST fire events remain active after acknowledgement removes them from the endpoint, until an actual clear event is received. Codes 9412/9413 classify an alarm and do not clear it. Existing hush/clear handling uses 1659/9421/9422. Reloading while an actual alarm remains active can still cause an unavailable-to-on transition and trigger Home Assistant automations; account for this in safety-related automation design.
 
-Alarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Event flags and recovered fire records persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across reloads or Home Assistant restarts. An acknowledged fire absent from both REST events and detector state cannot be recovered after reload. A missed clear can leave a recovered fire active until another clear or reload.
+Alarm and fault entities become unavailable when the hub reports offline or cloud synchronization fails. Fire flags and recovered fire records persist across ordinary WebSocket reconnects and REST refreshes, but are not stored across reloads or Home Assistant restarts. An acknowledged fire absent from both REST events and detector state cannot be recovered after reload. A missed clear can leave a recovered fire active until another clear or reload.
 
 The integration listens for documented WebSocket state changes and polls the REST API every five minutes as a fallback. It reconnects after network failures and refreshes the REST snapshot after reconnecting. This is intended for diagnostics and is **not suitable for fire safety monitoring**.
+
+## Reliable fault evidence
+
+Battery events 1384/3384 and signal events 1381/3381 require an explicit detector
+ID in `device.id` or `subject.id`, agreeing if both exist. Hub subjects, actor IDs,
+names and missing/conflicting identities never broadcast detector faults. Ambiguous
+evidence makes possible targets unknown. Hub battery codes 1302/3302 never affect
+detector batteries. Trouble events 1380/1389 latch an observed failure; no recovery
+is documented, and tests or guessed recovery codes never clear it.
+
+Event timestamps and per-detector watermarks order received evidence. Older events
+cannot overwrite newer ones; conflicting equal timestamps are unknown. Duplicates
+do not renew confidence lost through a delivery gap. A delayed event generated
+before connection is retained as an observation, rather than silently discarded.
+It cannot establish current battery/signal state without proof that newer events
+were not missed. A newer event generated within the current continuous WebSocket
+stream can establish that diagnostic, including a delayed delivery within that
+stream. Offline hub/reconnect boundaries invalidate old confidence. No arbitrary
+delay grace period is used. Missing, invalid or future timestamps leave the
+diagnostic unknown; untimed evidence cannot be ordered against later events.
+
+The diagnostic entity attributes `last_observed_event_code`,
+`last_observed_event_at` and `last_observed_event_source` expose an explicitly
+attributed observation without raw payloads or device identifiers. **Last observed
+means newest among received records, not latest in the cloud.**
+`current_status_confirmed` distinguishes current live evidence from historical
+observations. Trouble may be on as a latched failure report even when that attribute
+is false. Smoke/heat alarm entities and behavior from PR #9 are unchanged.
+
+Startup and periodic activity requests read one seven-day window per hub, at most
+once every five minutes; reloads and reconnects share that budget. Only the first
+300 returned records are processed. Pagination is undocumented: no page traversal,
+older windows or immediate 429 retries are attempted. The documented
+`meta.from`/`until`/`sort`/`hints` shape is accepted. Neither count/page fields nor
+a short or empty list prove completeness. Activity failure does not stop ordinary
+fire polling. Invalid ordering, duplicate records or wrong-hub references are
+rejected. Even an attributed low/recovery event cannot establish current battery
+or signal state if a newer opposite event might be omitted. History observations
+are retained; they do not clear delivery gaps or establish healthy status.
+
+Fault watermarks and observations survive ordinary integration reloads in an
+entry-scoped memory cache. Reloads hide prior battery/signal values until new,
+ordered live evidence establishes them. Full Home Assistant process restarts lose
+that cache and require fresh evidence. Trouble remains a latched diagnostic report,
+not proof that a detector is still faulty or has been repaired. Missing/null state
+fields, normal signal strength and successful tests never establish battery health.
+
+**Known HEATCAVIUS case:** the documented activity response can now expose an
+observed 1384 on the battery entity, but cannot by itself restore a confirmed
+current low-battery state. That still requires qualifying live evidence or an
+additional captured/authoritative contract proving that newer events are not
+omitted (or an authoritative current battery field). The app's battery source and
+the laundry-room detector have not been verified. See [API notes](docs/livisense-api.md#fault-evidence-policy-pr-10)
+and [verification](docs/pr-10-review.md).
 
 ## Known limitations
 
@@ -79,3 +133,4 @@ Credentials, device/hub names and identifiers are excluded. Unrecognized or
 potentially identifying strings are redacted; numeric model/type codes are also
 redacted conservatively. `extras.appDeviceId` is included only when it exactly
 matches the safe `type-model` pair. The supported-model flag recognizes smoke detectors, heat detectors and Smart Remotes.
+

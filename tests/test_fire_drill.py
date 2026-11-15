@@ -15,6 +15,7 @@ from custom_components.cavius_livisense.sensor import (
 @pytest.fixture
 def coordinator(hass):
     client = MagicMock()
+    client.activity = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     hub = {"id": "hub", "state": {"status": "online"}, "extras": None,
            "devices": [{"id": key, "model": model, "state": {"alarm": None}}
@@ -194,3 +195,4 @@ async def test_websocket_drill_frames_reach_coordinator(coordinator):
             assert coordinator.alarm_state("hub", "heat") is False
         finally:
             await listener.stop()
+

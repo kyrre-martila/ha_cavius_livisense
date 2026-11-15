@@ -17,6 +17,9 @@ from .websocket import LiviSenseWebSocket
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = LiviSenseClient(async_get_clientsession(hass), entry.data["email"], entry.data["password"])
     coordinator = LiviSenseCoordinator(hass, client)
+    cache = hass.data.setdefault(DOMAIN + "_fault_cache", {})
+    if entry.entry_id in cache:
+        coordinator.faults = cache.pop(entry.entry_id)
     try:
         await coordinator.async_config_entry_first_refresh()
     except AuthError as exc:
@@ -51,4 +54,7 @@ def _register_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator: Livi
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await entry.runtime_data.websocket.stop()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        hass.data.setdefault(DOMAIN + "_fault_cache", {})[entry.entry_id] = entry.runtime_data.faults
     return unloaded
+

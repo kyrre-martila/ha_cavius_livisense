@@ -1,5 +1,7 @@
 """Confirmed models and fire routing, using synthetic state and event payloads."""
 from types import SimpleNamespace
+from datetime import UTC, datetime
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +27,7 @@ def hub_data():
 @pytest.fixture
 def coordinator(hass):
     client = MagicMock()
+    client.activity = AsyncMock(return_value=[])
     client.profile = AsyncMock(return_value={"hubIds": ["hub"]})
     client.hub = AsyncMock(return_value=hub_data())
     client.unacknowledged_alarms = AsyncMock(return_value=[])
@@ -32,7 +35,7 @@ def coordinator(hass):
 
 
 def event(code, target="hub", field="subject"):
-    return {"hub": {"id": "hub"}, "event": {"code": code}, field: {"id": target}}
+    return {"hub": {"id": "hub"}, "event": {"code": code}, field: {"id": target}, "happenedAt": datetime.now(UTC).isoformat()}
 
 
 async def test_entities_and_diagnostics(coordinator):
@@ -127,7 +130,7 @@ async def test_heat_state_merge_faults_and_reconciliation(coordinator):
                              (1381, "signal", True), (3381, "signal", False),
                              (1380, "trouble", True), (1389, "trouble", True)]:
         await coordinator.async_apply_message("hub:event", event(code, "device-5"))
-        assert coordinator.flags["device-5"][key] is value
+        assert coordinator.faults.value("hub", "device-5", key) is value
         assert "device-6" not in coordinator.flags
 
 
@@ -153,6 +156,7 @@ async def test_real_ha_registry_reload_and_stable_ids(hass, code, alarm_state):
         patch("custom_components.cavius_livisense.api.LiviSenseClient.profile", return_value={"hubIds": ["hub"]}),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.hub", return_value=hub_data()),
         patch("custom_components.cavius_livisense.api.LiviSenseClient.unacknowledged_alarms", return_value=[event(code)]),
+        patch("custom_components.cavius_livisense.api.LiviSenseClient.activity", return_value=[]),
         patch("custom_components.cavius_livisense.websocket.LiviSenseWebSocket.start"),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -203,3 +207,4 @@ async def test_heat_delayed_rest_clear_and_new_alarm(coordinator):
     assert not coordinator.last_update_success
     assert coordinator.alarm_state("hub", "device-5") is True
     assert not binary_sensor.DetectorFlag(coordinator, "hub", "device-5", "heat").available
+

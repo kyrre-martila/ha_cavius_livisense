@@ -111,3 +111,26 @@ class LiviSenseClient:
         if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
             raise ApiError("Malformed alarm events")
         return events
+
+
+    async def activity(self, hub_id: str, start: int, end: int) -> list[dict[str, Any]]:
+        """Read one documented window, without assuming pagination or completeness.
+
+        Meta hints are opaque. No captured contract identifies the newest page
+        or proves the absence of omitted newer events. Limit processing to 300
+        records; neither a short response nor a count can establish current state.
+        """
+        if not 0 < end - start <= 7 * 86400:
+            raise ValueError("Activity requires a positive window of at most seven days")
+        response = await self._request(
+            "GET", f"/api/hubs/{quote(hub_id, safe='')}/activity",
+            params={"from": start, "until": end},
+        )
+        data, meta = response.get("data"), response.get("meta")
+        if (not isinstance(data, list) or not isinstance(meta, dict)
+                or type(meta.get("from")) is not int or meta["from"] != start
+                or type(meta.get("until")) is not int or meta["until"] != end
+                or meta.get("sort") != "desc"
+                or not all(isinstance(item, dict) for item in data[:300])):
+            raise ApiError("Malformed activity window")
+        return data[:300]
