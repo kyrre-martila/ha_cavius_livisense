@@ -3,7 +3,7 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, FIRE_DETECTOR_MODELS
+from .const import DOMAIN, FIRE_DETECTOR_MODELS, SUPPORTED_MODELS
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
@@ -21,14 +21,18 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities = []
         for hub_id, item in (coordinator.data or {}).items():
             for device in item["hub"].get("devices", []):
-                if not isinstance(device, dict) or device.get("model") not in FIRE_DETECTOR_MODELS or not isinstance(device.get("id"), str):
+                if not isinstance(device, dict) or device.get("model") not in SUPPORTED_MODELS or not isinstance(device.get("id"), str):
                     continue
                 device_id = device["id"]
                 if device_id in detector_known:
                     continue
                 detector_known.add(device_id)
-                alarm_key = "heat" if device["model"] == "HEATCAVIUS" else "smoke"
-                entities.extend(DetectorFlag(coordinator, hub_id, device_id, key) for key in (alarm_key, "battery", "signal", "trouble"))
+                if device["model"] in FIRE_DETECTOR_MODELS:
+                    alarm_key = "heat" if device["model"] == "HEATCAVIUS" else "smoke"
+                    keys = (alarm_key, "battery", "signal", "trouble")
+                else:
+                    keys = ("battery",)
+                entities.extend(DetectorFlag(coordinator, hub_id, device_id, key) for key in keys)
         if entities:
             async_add_entities(entities)
 
@@ -102,12 +106,31 @@ class DetectorFlag(CoordinatorEntity, BinarySensorEntity):
         item = (self.coordinator.data or {}).get(self.hub_id)
         state = item["hub"].get("state") if item else None
         return (isinstance(state, dict) and state.get("status") == "online"
-                and self.device_id in self.coordinator._detectors(self.hub_id))
+                and self.device_id in (
+                    self.coordinator._detectors(self.hub_id)
+                    if self.key != "battery"
+                    else {device["id"] for device in item["hub"].get("devices", [])
+                          if isinstance(device, dict)
+                          and device.get("model") in SUPPORTED_MODELS
+                          and isinstance(device.get("id"), str)}))
 
     @property
     def is_on(self):
         if self.key in ("smoke", "heat"):
             return self.coordinator.alarm_state(self.hub_id, self.device_id)
+        if self.key == "battery":
+            item = (self.coordinator.data or {}).get(self.hub_id, {})
+            device = next((device for device in item.get("hub", {}).get("devices", [])
+                           if isinstance(device, dict) and device.get("id") == self.device_id), None)
+            state = device.get("state") if isinstance(device, dict) else None
+            if isinstance(state, dict) and "warning" in state:
+                warning = state["warning"]
+                if warning == "lowBattery":
+                    return True
+                if warning is None:
+                    return False
+                # An unrelated warning does not establish battery health.
+                return None
         return self.coordinator.faults.value(self.hub_id, self.device_id, self.key)
 
 
